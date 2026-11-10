@@ -65,7 +65,7 @@ fn run(args: &[String]) -> Result<i32> {
         }
         "version" => cmds::version_cmd(&rest),
         "version-flag" | "-v" | "--version" => {
-            println!("zap 0.3.0");
+            println!("zap 0.1.0");
             Ok(0)
         }
         // implicit run: `zap test` == `zap run test`
