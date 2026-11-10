@@ -20,9 +20,11 @@ A tiny, fast, ts-first node package manager written in rust, with a custom plug'
 - **no node_modules** (default): zap installs a custom pnp runtime (`.pnp.cjs` + ESM resolve hooks) that maps every `require`/`import` through a flat resolution map. strict per-dependent resolution with a fallback pool for packages that under-declare deps.
 - **node_modules when you want it**: set `linker: node-modules` in config for a pnpm-style junction layout, plain `node` works with no hooks, editors get native resolution for free.
 - **workspaces**: glob-based monorepo support with one shared resolution tree; members resolve to their real dirs, cross-member deps work in both linkers.
+- **multi-run**: `zap run a b c` runs all listed scripts at once in a live split-pane view, bordered panes with per-script status, colours passed through, paged when they don't fit.
 - **reproducible**: `.zap-lock.json` records the resolved tree with integrity hashes; unchanged manifests skip resolution.
-- **publish-ready**: `zap pack` / `zap publish` / `zap whoami` / `zap version` speak the npm protocol, so private registries via `ZAP_REGISTRY` work too.
+- **publish-ready**: `zap pack` / `zap publish` / `zap whoami` speak the npm protocol, so private registries via `ZAP_REGISTRY` work too.
 - **safe**: every tarball is sha512-verified, and lifecycle scripts never run unless you opt in (`lifecycle: true`).
+- **migrate in**: `zap migrate` converts npm/yarn/pnpm/bun/deno projects to zap.
 
 ## commands
 
@@ -32,23 +34,57 @@ A tiny, fast, ts-first node package manager written in rust, with a custom plug'
 | `zap add <pkg>[@range]...` | add deps (`--dev`/`-D`; workspace member names auto-link as `workspace:*`) |
 | `zap remove <pkg>...` | remove deps |
 | `zap i[nstall]` | install root + workspaces, `--offline`, `--force`, `--refresh` |
-| `zap run <script> [args]` | run a package.json script with the linker active |
+| `zap ci` | clean install, production deps only (docker/CI builds) |
+| `zap run <script> [args]` | run a package.json script with the linker active (see running scripts below) |
+| `zap run a b c` | run several scripts concurrently in a live split-pane view |
 | `zap <script>` | shorthand for run |
 | `zap exec <cmd> [args]` | run any command with the linker active |
 | `zap x\|dlx <pkg> [args]` | run a package's bin one-off (like npx) |
 | `zap create <tmpl> [args]` | scaffold via create-* initializers (like npm create) |
 | `zap tsc [args]` | run the zap-managed typescript compiler |
-| `zap version [major\|minor\|patch\|x.y.z]` | bump package.json version |
 | `zap pack` | build an npm tarball |
 | `zap publish [--tag t] [--access a] [--otp c] [--dry-run]` | publish to the registry |
 | `zap whoami` | print the authenticated user |
+| `zap login` / `zap logout` | authenticate with (or clear credentials for) the registry |
+| `zap registry [add\|use\|list\|current]` | switch registries (private -> public flow) |
 | `zap upgrade [pkg...]` | no args: re-resolve in ranges; with args: bump to latest |
 | `zap outdated` | show deps behind the registry (exit 1 when outdated) |
 | `zap ls [--all]` | list deps + workspace members |
-| `zap why <pkg>` | dependency chains |
+| `zap why <pkg>` | dependency chains (`--project` scans source files) |
+| `zap view\|info <pkg>` | registry metadata for a package (cached) |
+| `zap licenses` | license summary of installed packages |
+| `zap audit` | check installed packages for known advisories |
+| `zap doctor` | sanity checks: lockfile sync, runtime, ts, store |
 | `zap bin [name]` | print bin paths |
 | `zap store [path\|size]` | inspect the global store |
 | `zap cache clean` | wipe store + caches |
+| `zap config [-g] [<key> [value]]` | read or set config (no rc file = new `.zaprc.yaml`) |
+| `zap migrate` | convert npm/yarn/pnpm/bun/deno projects to zap |
+| `zap skills` | inject zap usage into CLAUDE.md / AGENTS.md (`--remove` to strip) |
+
+## running scripts
+
+`zap run <script>` streams one script plainly. give `run` several script names and they all
+execute at once in a live split-pane view:
+
+- one bordered pane per script with its own status (`✓ exit 0` / `✗ exit N`); the view holds
+  after everything finishes until you press enter
+- panes page with the left/right arrow keys when the grid doesn't fit the terminal
+- script colours are kept (colour is forced on for the pane children), cursor-manipulating
+  escape sequences are filtered so the grid stays intact
+- arguments after `--` are appended to every script: `zap run test:a test:b -- --watch`
+- the exit code is the first failing script's, and a compact summary prints on exit
+
+every `zap run` also honours npm-style hooks: the literal `pre<script>` runs first and
+`post<script>` runs last when they exist in package.json. a failing `pre<script>` cancels
+the script and its post hook.
+
+## lifecycle scripts
+
+package lifecycle scripts never run unless you opt in with `lifecycle: true`. when enabled,
+installs run dependency `preinstall`/`install`/`postinstall` scripts plus your root project's
+own `preinstall`/`install`/`postinstall` in npm order. workspace members never get lifecycle
+runs.
 
 ## configuration
 
