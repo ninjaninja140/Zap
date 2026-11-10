@@ -117,4 +117,4 @@ declare `"workspaces": ["apps/*", "packages/*"]` in the root package.json. every
 
 <hr>
 
--# This project was made with small bits of AI assistance, however anything generated has still been reviewed by a human who can read, write and understand Rust!
+<small>This project was made with small bits of AI assistance, however anything generated has still been reviewed by a human who can read, write and understand Rust!</small>
