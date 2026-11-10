@@ -1,0 +1,23 @@
+[package]
+name = "zap"
+version = "0.1.0"
+edition = "2021"
+description = "a tiny, fast node package manager with a custom pnp runtime"
+
+[dependencies]
+anyhow = "1"
+tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "blocking", "http2"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["preserve_order"] }
+flate2 = "1"
+tar = "0.4"
+sha2 = "0.10"
+sha1 = "0.10"
+base64 = "0.22"
+semver = "1"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

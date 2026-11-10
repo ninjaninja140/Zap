@@ -1,0 +1,14 @@
+# rust
+target/
+registry/target/
+
+# zap runtime
+.zap/
+node_modules/
+.pnp.cjs
+.pnp.json
+.pnp.mjs
+.pnp-resolve.mjs
+
+# packed tarballs
+*.tgz
