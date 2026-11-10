@@ -6,24 +6,35 @@
 - [x] `.zaprc` family (yaml/yml/json/jsonc/toml/plain) + `$schema` auto-injection
 - [x] ts-first: managed/user typescript, `@types/*` auto-install, `zap tsc`
 - [x] `zap x` local-first bins, `dlx`, `run`/`r`/`task`, `exec`
-- [x] publish suite: `pack`, `publish` (web-auth login, interactive OTP, nameAliases), `whoami`, `version`
+- [x] publish suite: `pack`, `publish` (web-auth login, interactive OTP, nameAliases), `whoami`
 - [x] registry switching (`zap registry add/use/list/current`, `--registry` override)
 - [x] dev utils: `view/info`, `licenses`, `audit`, `doctor`, `outdated`, `upgrade`, `store`, `bin`, `cache clean`
+- [x] `zap config` (read/set, global with -g), `zap skills` (inject usage into CLAUDE.md/AGENTS.md), `zap ci` (clean production-only install)
 - [x] `.zapignore` for pack
 - [x] linux/macos portability (unix shims, symlinks, rustls) - linux verified in WSL, macos rides CI
 - [x] CI caching (ZAP_HOME, `--frozen-lockfile`), Dockerfile, build-only workflows
+- [x] zap migrate command
+- [x] per-command heading/banner art (`zap.emblem.txt`, `zap.heading.txt`)
+- [x] command registry refactor: one file per command under `src/cmds/<group>/`, build.rs-generated registry drives dispatch, headings and help automatically
+- [x] multi-run: `zap run a b c` runs all listed scripts concurrently in a split-pane alternate-screen view (`zap.text.txt` wordmark, per-pane status/exit codes), args after `--` go to every script
+- [x] npm-style pre/post script hooks: literal `pre<script>`/`post<script>` run around every `zap run`
+- [x] root project lifecycle scripts during install (`preinstall`/`install`/`postinstall`, npm order, opt-in `lifecycle: true` alongside dep lifecycles)
+- [x] extra: move commands system to file-based handler system
+- [x] extra: categorised commands in help menu
+- [x] zap headings added
+- [x] multi-command
 
 ## successful runs
 - [x] first real CI run on github (verifies macos + publishes artifacts)
 
 ## next up
 - [ ] node API for zap as a native npm package (napi-rs: install/add/remove/resolve/list/why/pack/publish)
-- [ ] put zap.exe / zap shim on PATH on both machines (or `zap self install`)
 - [ ] `zap outdated` interactive upgrade mode (yarn upgrade-interactive style)
-- [ ] publish: git tag + changelog generation on `zap version`
+- [ ] `zap version` for real (currently an honest not-implemented stub): major|minor|patch|x.y.z bumps + git tag + changelog generation
 - [ ] lifecycle scripts sandboxing (allowlist by package hash)
-- [ ] colour and make our terminal more fun?
+- [ ] colour and make our terminal more fun? [in progress]
 - [ ] zap installer, try from zap.nn140.uk/versions/latest:dev:v0.0.0, if fail then try from github releases
+- [ ] "zap console" a tui for using zap for essentially an entire command window, only usable in non-cicd environments
 
 ## later / ideas
 - [ ] editor story for pnp: tsserver integration or pnpify-style wrapper

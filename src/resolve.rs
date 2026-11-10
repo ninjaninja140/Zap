@@ -24,6 +24,7 @@ pub async fn resolve(
     members: &mut [LockMember],
     member_reqs: &[BTreeMap<String, String>],
     type_reqs: &BTreeMap<String, String>,
+    pins: &BTreeMap<String, String>,
 ) -> Result<(Tree, BTreeMap<String, bool>)> {
     let reg = reg.clone();
     let member_names: HashSet<String> = members.iter().map(|m| m.name.clone()).collect();
@@ -81,16 +82,19 @@ pub async fn resolve(
                     .get(&name)
                     .with_context(|| format!("no metadata for `{}`", name))?
                     .clone();
-                let ver = crate::util::pick_version(&name, &pack, &range).with_context(|| {
-                    match &parent {
-                        Parent::Root => format!("resolving root dependency `{}` ({})", name, range),
-                        Parent::Member(i) => {
-                            format!("`{}` requires `{}` ({})", members[*i].name, name, range)
+                let ver = match pins.get(&name) {
+                    Some(pv) if pack.versions.contains_key(pv) => pv.clone(),
+                    _ => crate::util::pick_version(&name, &pack, &range).with_context(|| {
+                        match &parent {
+                            Parent::Root => format!("resolving root dependency `{}` ({})", name, range),
+                            Parent::Member(i) => {
+                                format!("`{}` requires `{}` ({})", members[*i].name, name, range)
+                            }
+                            Parent::Pkg(id) => format!("`{}` requires `{}` ({})", id, name, range),
+                            Parent::Types => format!("type dependency `{}` ({})", name, range),
                         }
-                        Parent::Pkg(id) => format!("`{}` requires `{}` ({})", id, name, range),
-                        Parent::Types => format!("type dependency `{}` ({})", name, range),
-                    }
-                })?;
+                    })?,
+                };
                 let id = format!("{}@{}", name, ver);
                 if !packages.contains_key(&id) {
                     let vi = pack

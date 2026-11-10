@@ -1,4 +1,14 @@
-# Zap
+```
+          █          
+         ██          ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
+       ███           ░        ░░░      ░░░       ░░
+     ████            ▒▒▒▒▒▒  ▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒
+    █████████        ▓▓▓▓  ▓▓▓▓▓  ▓▓▓▓  ▓▓       ▓▓
+        ███          ██  ███████        ██  ███████
+       ███           █        ██  ████  ██  ███████
+      ██             ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+      █         
+```
 
 A tiny, fast, ts-first node package manager written in rust, with a custom plug'n'play (pnp) runtime.
 
@@ -104,3 +114,7 @@ declare `"workspaces": ["apps/*", "packages/*"]` in the root package.json. every
 - exports resolution covers exact entries; wildcard export patterns fall back to the filesystem
 - lifecycle scripts are opt-in and never run for workspace members
 - `files`/`.npmignore` handling in `zap pack` is a pragmatic subset of npm's rules
+
+<hr>
+
+-# This project was made with small bits of AI assistance, however anything generated has still been reviewed by a human who can read, write and understand Rust!

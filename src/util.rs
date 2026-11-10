@@ -18,6 +18,16 @@ pub fn cyan(s: impl AsRef<str>) -> String {
 pub fn dim(s: impl AsRef<str>) -> String {
     format!("\x1b[2m{}\x1b[0m", s.as_ref())
 }
+/// the brand electric blue (RGB 49, 86, 255), truecolor ANSI
+pub fn electric(s: impl AsRef<str>) -> String {
+    format!("\x1b[38;2;49;86;255m{}\x1b[0m", s.as_ref())
+}
+pub fn bold(s: impl AsRef<str>) -> String {
+    format!("\x1b[1m{}\x1b[0m", s.as_ref())
+}
+pub fn electric_bold(s: impl AsRef<str>) -> String {
+    format!("\x1b[1;38;2;49;86;255m{}\x1b[0m", s.as_ref())
+}
 
 pub fn home() -> Result<PathBuf> {
     // ZAP_HOME overrides everything (CI caches, docker cache mounts)

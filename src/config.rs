@@ -1,5 +1,7 @@
-use anyhow::Result;
+use anyhow::{anyhow, bail, Context, Result};
 use std::path::{Path, PathBuf};
+
+use crate::util::{dim, green};
 
 /// zap configuration, loaded from the first .zaprc* file found walking up from the
 /// working directory. every file shape is a flat key/value map under the hood.
@@ -143,10 +145,230 @@ fn ensure_schema(path: &Path) {
     }
 }
 
+/// nearest rc file walking up from `start`
+pub fn find_rc_file(start: &Path) -> Option<PathBuf> {
+    let mut dir = Some(start.to_path_buf());
+    while let Some(d) = dir.take() {
+        for name in RC_FILES {
+            let p = d.join(name);
+            if p.is_file() {
+                return Some(p);
+            }
+        }
+        dir = d.parent().map(Path::to_path_buf);
+    }
+    None
+}
+
+pub fn global_config_path() -> Result<PathBuf> {
+    Ok(crate::util::zap_home()?.join("config.yaml"))
+}
+
+/// every settable key, in display order
+pub const CONFIG_KEYS: [&str; 12] = [
+    "linker",
+    "registry",
+    "typescript",
+    "concurrency",
+    "strict",
+    "save-exact",
+    "prefer-offline",
+    "cache-ttl",
+    "lifecycle",
+    "store-dir",
+    "token",
+    "editor-node-modules",
+];
+
 impl Config {
-    /// walk up from `start` looking for an rc file,, env vars override file values
+    /// effective value of one key, as a display string (token masked)
+    pub fn get(&self, key: &str) -> Option<String> {
+        let k = normalize_key(key);
+        match k.as_str() {
+            "linker" | "nodelinker" => Some(match self.linker {
+                Linker::Pnp => "pnp".to_string(),
+                Linker::NodeModules => "node-modules".to_string(),
+            }),
+            "registry" => self.registry.clone(),
+            "typescript" | "ts" | "tsversion" | "typescriptversion" => self.typescript.clone(),
+            "concurrency" | "jobs" => Some(self.concurrency.to_string()),
+            "strict" | "pnpstrict" => Some(self.strict.to_string()),
+            "saveexact" => Some(self.save_exact.to_string()),
+            "preferoffline" => Some(self.prefer_offline.to_string()),
+            "cachettl" | "cachettlhours" => Some(self.cache_ttl_hours.to_string()),
+            "lifecycle" | "lifecycles" | "enablescripts" => Some(self.lifecycle.to_string()),
+            "storedir" => self.store_dir.as_ref().map(|p| p.to_string_lossy().to_string()),
+            "token" | "accesstoken" | "authtoken" => self
+                .token
+                .as_ref()
+                .map(|_| "•••••••• (set, change with `zap config -g token <value>` or edit the file)".to_string()),
+            "editornodemodules" => Some(self.editor_node_modules.to_string()),
+            _ => None,
+        }
+    }
+}
+
+fn normalize_key(k: &str) -> String {
+    k.trim().to_lowercase().replace(['-', '_'], "")
+}
+
+// zap config
+
+/// `zap config`, dump effective config · `zap config <key>`, read one ·
+/// `zap config <key> <value>`, set (nearest rc, or the global one with -g/--global;
+/// creates .zaprc.yaml when no project rc exists)
+pub fn config_cmd(args: &[String]) -> Result<i32> {
+    let global = args.iter().any(|a| a == "-g" || a == "--global");
+    let rest: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();
+
+    match rest.len() {
+        0 => {
+            let cfg = Config::load(&std::env::current_dir()?);
+            let source = if global {
+                global_config_path().unwrap_or_default()
+            } else {
+                find_rc_file(&std::env::current_dir()?).unwrap_or_else(|| std::path::PathBuf::from("(defaults)"))
+            };
+            for key in CONFIG_KEYS {
+                let value = cfg.get(key).unwrap_or_else(|| dim("(default)"));
+                println!("  {} = {}", key, value);
+            }
+            println!("{} {}", dim("source:"), source.display());
+            Ok(0)
+        }
+        1 => {
+            let key = &rest[0];
+            let cfg = Config::load(&std::env::current_dir()?);
+            match cfg.get(key) {
+                Some(v) => {
+                    println!("{}", v);
+                    Ok(0)
+                }
+                None => {
+                    unknown_key(key)?;
+                    Ok(0)
+                }
+            }
+        }
+        2 => {
+            let (key, value) = (&rest[0], &rest[1]);
+            validate_key_value(key, value)?;
+            if global {
+                let path = global_config_path()?;
+                if let Some(p) = path.parent() {
+                    std::fs::create_dir_all(p)?;
+                }
+                set_in_file(&path, key, value)?;
+                println!("{} {} = {} ({})", green("set"), key, value, path.display());
+            } else {
+                let start = std::env::current_dir()?;
+                let path = find_rc_file(&start).unwrap_or_else(|| start.join(".zaprc.yaml"));
+                set_in_file(&path, key, value)?;
+                println!("{} {} = {} ({})", green("set"), key, value, path.display());
+            }
+            Ok(0)
+        }
+        n => bail!("usage: zap config [-g] [<key> [value]] (got {} positional args)", n),
+    }
+}
+
+fn unknown_key(key: &str) -> Result<()> {
+    bail!(
+        "unknown config key `{}`, valid keys: {}",
+        key,
+        CONFIG_KEYS.join(", ")
+    )
+}
+
+fn validate_key_value(key: &str, value: &str) -> Result<()> {
+    let k = normalize_key(key);
+    let known = CONFIG_KEYS.iter().any(|c| normalize_key(c) == k);
+    if !known {
+        return unknown_key(key);
+    }
+    match k.as_str() {
+        "linker" | "nodelinker" => {
+            if !matches!(value, "pnp" | "node-modules" | "node_modules" | "nm" | "hoisted" | "") {
+                bail!("linker must be pnp or node-modules");
+            }
+        }
+        "concurrency" | "jobs" | "cachettl" => {
+            value
+                .parse::<u64>()
+                .map_err(|_| anyhow!("`{}` must be a number", key))?;
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// insert or replace one key in an rc file, respecting the file's format.
+/// .jsonc is refused (rewriting would destroy comments).
+fn set_in_file(path: &Path, key: &str, value: &str) -> Result<()> {
+    let name = path.file_name().and_then(|s| s.to_str()).unwrap_or("");
+    if name.ends_with(".jsonc") {
+        bail!("{} is jsonc, edit it manually (rewriting would destroy comments)", path.display());
+    }
+    if let Some(p) = path.parent() {
+        std::fs::create_dir_all(p)?;
+    }
+    if name.ends_with(".json") {
+        let text = std::fs::read_to_string(path).unwrap_or_else(|_| "{}".to_string());
+        let mut v: serde_json::Value = serde_json::from_str(&text)
+            .with_context(|| format!("parsing {}", path.display()))?;
+        let obj = v.as_object_mut().ok_or_else(|| anyhow::anyhow!("{} root must be an object", path.display()))?;
+        let typed = typed_value(value);
+        obj.insert(normalize_key(key), typed);
+        std::fs::write(path, format!("{}\n", serde_json::to_string_pretty(&v)?))?;
+        return Ok(());
+    }
+    let sep = if name.ends_with(".toml") { " = " } else { ": " };
+    let norm = normalize_key(key);
+    let text = std::fs::read_to_string(path).unwrap_or_default();
+    let mut lines: Vec<String> = text.lines().map(|l| l.to_string()).collect();
+    let mut replaced = false;
+    for line in &mut lines {
+        let t = line.trim();
+        if t.is_empty() || t.starts_with('#') || t.starts_with("//") {
+            continue;
+        }
+        let split_at = [t.find(':'), t.find('=')].into_iter().flatten().min();
+        let Some(idx) = split_at else { continue };
+        if normalize_key(&t[..idx]) == norm {
+            *line = format!("{}{}{}", key, sep, value);
+            replaced = true;
+            break;
+        }
+    }
+    if !replaced {
+        lines.push(format!("{}{}{}", key, sep, value));
+    }
+    std::fs::write(path, format!("{}\n", lines.join("\n")))?;
+    Ok(())
+}
+
+/// store real types in json: bool / number / string
+fn typed_value(value: &str) -> serde_json::Value {
+    match value {
+        "true" => serde_json::json!(true),
+        "false" => serde_json::json!(false),
+        v if v.parse::<u64>().is_ok() => serde_json::json!(v.parse::<u64>().unwrap()),
+        v => serde_json::json!(v),
+    }
+}
+
+impl Config {
+    /// the global ~/.zap/config.yaml is the lowest file layer, the nearest project rc
+    /// overrides it, env vars override everything
     pub fn load(start: &Path) -> Config {
         let mut cfg = Config::default();
+        if let Ok(g) = global_config_path() {
+            if g.is_file() {
+                if let Ok(pairs) = read_pairs(&g) {
+                    apply_pairs(&mut cfg, &pairs, &g);
+                }
+            }
+        }
         let mut dir = Some(start.to_path_buf());
         while let Some(d) = dir.take() {
             let mut found = false;
@@ -339,7 +561,7 @@ fn value_to_string(v: &serde_json::Value) -> String {
 }
 
 /// strip // and /* */ comments (not inside string literals)
-fn strip_jsonc(text: &str) -> String {
+pub(crate) fn strip_jsonc(text: &str) -> String {
     let mut out = String::with_capacity(text.len());
     let bytes: Vec<char> = text.chars().collect();
     let mut i = 0;

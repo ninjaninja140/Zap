@@ -197,7 +197,7 @@ fn is_ignored(rel: &str, rules: &[String]) -> bool {
     })
 }
 
-// ---------------------------------------------------------------- commands
+// commands
 
 pub fn pack_cmd(_args: &[String]) -> Result<i32> {
     let dir = crate::util::find_root()?;
@@ -427,7 +427,7 @@ pub fn whoami_cmd(_args: &[String]) -> Result<i32> {
     Ok(0)
 }
 
-// ---------------------------------------------------------------- auth
+// auth
 
 fn registry_base(cfg: &Config) -> Result<String> {
     // precedence: project .zaprc / env > saved "current" registry > npmjs default
@@ -446,7 +446,7 @@ fn registry_base(cfg: &Config) -> Result<String> {
     Ok("https://registry.npmjs.org".to_string())
 }
 
-// ---------------------------------------------------------------- registries
+// registries
 
 fn registries_path() -> Result<PathBuf> {
     Ok(crate::util::zap_home()?.join("registries.json"))

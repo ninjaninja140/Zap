@@ -1,6 +1,7 @@
 # rust
 target/
 registry/target/
+src/cmds/gen.rs
 
 # zap runtime
 .zap/
@@ -12,3 +13,6 @@ node_modules/
 
 # packed tarballs
 *.tgz
+
+# agent instructions & memory (local only)
+AGENTS.md
