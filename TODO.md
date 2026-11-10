@@ -1,6 +1,6 @@
 # zap todo
 
-## shipped
+## finished
 - [x] core install/add/remove with pnp + node_modules linkers, lockfile, global store
 - [x] workspaces (globs, cross-member deps, `workspace:*`)
 - [x] `.zaprc` family (yaml/yml/json/jsonc/toml/plain) + `$schema` auto-injection
@@ -23,6 +23,7 @@
 - [ ] publish: git tag + changelog generation on `zap version`
 - [ ] lifecycle scripts sandboxing (allowlist by package hash)
 - [ ] colour and make our terminal more fun?
+- [ ] zap installer, try from zap.nn140.uk/versions/latest:dev:v0.0.0, if fail then try from github releases
 
 ## later / ideas
 - [ ] editor story for pnp: tsserver integration or pnpify-style wrapper
