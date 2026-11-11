@@ -125,6 +125,10 @@ fn run(args: &[String]) -> Result<i32> {
     }
 
     match cmd {
+        // bare `zap`: the category overview, same as `zap help` — the
+        // implicit-run path never sees empty args (outside projects that was
+        // a find_root error, inside them the scripts listing)
+        "" => help_command(&[]),
         "version-flag" | "-v" | "--version" => {
             println!("zap {}", VERSION);
             Ok(0)
@@ -259,6 +263,15 @@ mod tests {
         for (g, _) in cmds::GROUP_INFO {
             assert!(s.contains(g), "lists valid category {}", g);
         }
+    }
+
+    #[test]
+    fn bare_zap_routes_to_the_categories_view() {
+        // bare `zap` == `zap help`: overview + exit 0, never the implicit-run
+        // path. discriminable here because the crate root has no package.json
+        // (the old route returned the find_root error); the view bytes are
+        // covered by bare_help_is_categories_only
+        assert!(run(&[]).is_ok(), "bare zap exits 0");
     }
 }
 
