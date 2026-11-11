@@ -120,7 +120,7 @@ fn pane_frame(l: &Layout, header_h: usize, page: usize, i: usize) -> Frame {
 
 /// repaint decision for one pane: dirty running panes always repaint; a
 /// finished pane gets exactly one final repaint (borders + frozen tail + final
-/// status) and is then static — the tick loop skips it entirely (no repaint,
+/// status) and is then static, the tick loop skips it entirely (no repaint,
 /// no clear of its region) until a page switch or process end repaints all
 fn needs_repaint(force: bool, seq: u64, painted_seq: u64, done: bool, done_shown: bool) -> bool {
     if force {
@@ -262,7 +262,7 @@ pub fn run_multi(
             std::io::stdout().flush()?;
             hanging = true;
             // keep the finished view (statuses + hint) up until enter, but
-            // only with a real console attached — piped runs exit immediately
+            // only with a real console attached, piped runs exit immediately
             // so automation and tests never hang
             if guard.raw_active() {
                 print!("{}", page_indicator(page, l.pages, w, header_h, true));
@@ -318,7 +318,7 @@ fn run_stages(pane: &Pane, stages: Vec<(String, String)>, cwd: &Path, env_root: 
         c.current_dir(cwd);
         crate::pnp::apply_env(&mut c, env_root, linker);
         // multi-run only: children run on pipes, so most tools auto-disable
-        // colour — flip the big three ecosystem switches back on
+        // colour, flip the big three ecosystem switches back on
         // shortcut: tools with their own colour flags may still need
         // --color=always passed through the script itself
         c.env("FORCE_COLOR", "1");
@@ -473,7 +473,7 @@ fn paint(out: &mut String, pane: &Pane, f: Frame, name: &str, aborted: bool) {
 
 /// position + write one pane line; deliberately no erase sequence: `ESC[2K`
 /// erases the WHOLE row from any column, so the right pane's repaints wiped
-/// the left panes off the screen — every pane line is composed to exactly its
+/// the left panes off the screen, every pane line is composed to exactly its
 /// pane's width, so the overwrite itself is the clear and stays in-bounds
 fn put(out: &mut String, row: usize, col: usize, text: &str) {
     out.push_str(&format!("\x1b[{};{}H{}", row, col, text));
@@ -924,6 +924,7 @@ mod term {
 #[cfg(not(windows))]
 mod term {
     use super::Key;
+    use std::io::Read;
     use std::process::{Command, Stdio};
     use std::sync::mpsc;
 
@@ -990,7 +991,7 @@ mod term {
 /// this are scrollback-poisoned (`mode con` buffer dims on some boxes) or
 /// broken env vars, and layout against them paints panes below the viewport
 // shortcut: treat implausible detections as detection failure and fall through
-// the chain to 80x24 — srWindow makes this near-unreachable on windows, the
+// the chain to 80x24, srWindow makes this near-unreachable on windows, the
 // guard exists for the mode-con fallback path (piped/odd consoles)
 fn plausible_window(w: usize, h: usize) -> bool {
     (1..=500).contains(&w) && (1..=200).contains(&h)
@@ -1274,7 +1275,7 @@ mod tests {
     #[test]
     fn pane_paint_covers_its_region_without_line_erases() {
         // the left-pane vanish: put() used to open each write with ESC[2K,
-        // which erases the WHOLE row from any column — the right pane's
+        // which erases the WHOLE row from any column, the right pane's
         // repaints wiped the left pane's columns on every tick. panes must
         // overwrite their exact region instead, never erasing
         let running: Pane = Arc::new(Mutex::new(PaneInner {
@@ -1293,7 +1294,7 @@ mod tests {
         // chars, so the overwrite is complete and neighbors stay untouched
         assert!(covers_exact_width(&s, f.w), "pane lines must cover exactly their width");
         // degenerate tiny pane: a long status clamps so every line stays w
-        // wide — the fully stripped frame is title+body+bottom, no overflow
+        // wide, the fully stripped frame is title+body+bottom, no overflow
         let done: Pane = Arc::new(Mutex::new(PaneInner {
             lines: VecDeque::new(),
             seq: 2,

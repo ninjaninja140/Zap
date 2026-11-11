@@ -1,3 +1,4 @@
+mod allow;
 mod cmds;
 mod config;
 mod devtools;
@@ -51,7 +52,7 @@ fn print_heading(args: &[String]) {
         .replace("🗲", &format!("\x1b[38;2;49;86;255m🗲\x1b[0m"))
         .replace("zap", styled_zap)
         .replace("v0.0.0", &format!("v{}", VERSION))
-        // FULL_COMMAND first — "COMMAND" is a substring of it
+        // FULL_COMMAND first, "COMMAND" is a substring of it
         .replace("> FULL_COMMAND", &styled_full)
         .replace("COMMAND", &styled_cmd)
         .replace("USAGE", &styled_usage);
@@ -109,7 +110,7 @@ fn run(args: &[String]) -> Result<i32> {
     let cmd = args.first().map(|s| s.as_str()).unwrap_or("");
     let rest: Vec<String> = args.iter().skip(1).cloned().collect();
 
-    // heading for all commands (skip bare zap and help — the help body is its own front matter)
+    // heading for all commands (skip bare zap and help, the help body is its own front matter)
     if !cmd.is_empty() && !matches!(cmd, "help" | "-h" | "--help") {
         print_heading(args);
         println!();

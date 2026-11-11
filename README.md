@@ -60,6 +60,7 @@ A tiny, fast, ts-first node package manager written in rust, with a custom plug'
 | `zap cache clean` | wipe store + caches |
 | `zap config [-g] [<key> [value]]` | read or set config (no rc file = new `.zaprc.yaml`) |
 | `zap migrate` | convert npm/yarn/pnpm/bun/deno projects to zap |
+| `zap allow [pkg...]` | allowlist packages whose lifecycle scripts may run (`--remove` to revoke) |
 | `zap skills` | inject zap usage into CLAUDE.md / AGENTS.md (`--remove` to strip) |
 
 ## running scripts
@@ -82,9 +83,21 @@ the script and its post hook.
 ## lifecycle scripts
 
 package lifecycle scripts never run unless you opt in with `lifecycle: true`. when enabled,
-installs run dependency `preinstall`/`install`/`postinstall` scripts plus your root project's
-own `preinstall`/`install`/`postinstall` in npm order. workspace members never get lifecycle
-runs.
+installs run your root project's own `preinstall`/`install`/`postinstall` in npm order, and
+dependency scripts run **only for allowlisted packages**: a package's id and integrity hash
+must match an entry in `.zap-allow.json` (next to package.json, commit it).
+
+- `zap allow` — list allowlisted packages + any resolved packages with scripts still pending
+- `zap allow <pkg>...` — approve (records the lockfile's hash; a dep bump = new hash = scripts
+  blocked again until re-approved)
+- `zap allow --remove <pkg>...` — revoke
+
+a package with lifecycle scripts that isn't allowlisted is skipped with a one-line note at
+install. workspace members never get lifecycle runs.
+
+trust everything instead? `zap allow --all` sets `lifecycle-allow-all: true` in your `.zaprc`
+and deletes the allowlist file — every package's scripts run, no gate. `zap allow --remove
+--all` reverts to hash-verified mode.
 
 ## configuration
 

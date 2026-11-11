@@ -19,10 +19,14 @@
 - [x] multi-run: `zap run a b c` runs all listed scripts concurrently in a split-pane alternate-screen view (`zap.text.txt` wordmark, per-pane status/exit codes), args after `--` go to every script
 - [x] npm-style pre/post script hooks: literal `pre<script>`/`post<script>` run around every `zap run`
 - [x] root project lifecycle scripts during install (`preinstall`/`install`/`postinstall`, npm order, opt-in `lifecycle: true` alongside dep lifecycles)
+- [x] lifecycle scripts sandboxing: `.zap-allow.json` hash allowlist — with `lifecycle: true`, only packages whose pkg-id + integrity hash are allowlisted (via `zap allow`) run their scripts; root lifecycle unaffected
+- [x] `zap allow --all`: trust-all mode (`lifecycle-allow-all` in .zaprc, allowlist file removed) + `zap allow --remove --all` to revert
 - [x] extra: move commands system to file-based handler system
 - [x] extra: categorised commands in help menu
 - [x] zap headings added
 - [x] multi-command
+- [x] lifecycle scripts sandboxing (allowlist by package hash)
+
 
 ## successful runs
 - [x] first real CI run on github (verifies macos + publishes artifacts)
@@ -31,7 +35,6 @@
 - [ ] node API for zap as a native npm package (napi-rs: install/add/remove/resolve/list/why/pack/publish)
 - [ ] `zap outdated` interactive upgrade mode (yarn upgrade-interactive style)
 - [ ] `zap version` for real (currently an honest not-implemented stub): major|minor|patch|x.y.z bumps + git tag + changelog generation
-- [ ] lifecycle scripts sandboxing (allowlist by package hash)
 - [ ] colour and make our terminal more fun? [in progress]
 - [ ] zap installer, try from zap.nn140.uk/versions/latest:dev:v0.0.0, if fail then try from github releases
 - [ ] "zap console" a tui for using zap for essentially an entire command window, only usable in non-cicd environments
@@ -46,6 +49,9 @@
 - [ ] make a graphical zap installer with gpuix for a rust learning experiment
 - [ ] zap website at nn140.uk to host versions, downloads and usage docs
 - [ ] graphical manager with gpuix for zap? (cache, project management, etc)
+- [ ] plugin framework to go into .zap/plugins
+- [ ] hooks framework to go into .zap/hooks
+- [ ] custom commands framework to go into .zap/commands
 
 ## planned side projects
 - [ ] rust registry server

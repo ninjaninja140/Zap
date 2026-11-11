@@ -22,6 +22,8 @@ pub struct Config {
     pub editor_node_modules: bool,
     /// registry auth token for publish/whoami and private registries
     pub token: Option<String>,
+    /// trust every package's lifecycle scripts (bypasses the .zap-allow.json gate)
+    pub lifecycle_allow_all: bool,
 }
 
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -45,6 +47,7 @@ impl Default for Config {
             typescript: None,
             editor_node_modules: true,
             token: None,
+            lifecycle_allow_all: false,
         }
     }
 }
@@ -93,6 +96,7 @@ pub const ZAPRC_SCHEMA: &str = r##"{
     "prefer-offline": { "type": "boolean", "description": "always use cached registry metadata when present" },
     "cache-ttl": { "type": "integer", "description": "metadata cache lifetime in hours" },
     "lifecycle": { "type": "boolean", "description": "opt in to preinstall/install/postinstall scripts" },
+    "lifecycle-allow-all": { "type": "boolean", "description": "trust every package's lifecycle scripts (bypasses the .zap-allow.json gate)" },
     "store-dir": { "type": "string", "description": "custom global store location" },
     "token": { "type": "string", "description": "registry auth token (prefer env vars in CI)" },
     "editor-node-modules": { "type": "boolean", "description": "also create node_modules junctions for editors/tsc when using pnp" }
@@ -165,7 +169,7 @@ pub fn global_config_path() -> Result<PathBuf> {
 }
 
 /// every settable key, in display order
-pub const CONFIG_KEYS: [&str; 12] = [
+pub const CONFIG_KEYS: [&str; 13] = [
     "linker",
     "registry",
     "typescript",
@@ -175,6 +179,7 @@ pub const CONFIG_KEYS: [&str; 12] = [
     "prefer-offline",
     "cache-ttl",
     "lifecycle",
+    "lifecycle-allow-all",
     "store-dir",
     "token",
     "editor-node-modules",
@@ -197,6 +202,7 @@ impl Config {
             "preferoffline" => Some(self.prefer_offline.to_string()),
             "cachettl" | "cachettlhours" => Some(self.cache_ttl_hours.to_string()),
             "lifecycle" | "lifecycles" | "enablescripts" => Some(self.lifecycle.to_string()),
+            "lifecycleallowall" => Some(self.lifecycle_allow_all.to_string()),
             "storedir" => self.store_dir.as_ref().map(|p| p.to_string_lossy().to_string()),
             "token" | "accesstoken" | "authtoken" => self
                 .token
@@ -252,7 +258,6 @@ pub fn config_cmd(args: &[String]) -> Result<i32> {
         }
         2 => {
             let (key, value) = (&rest[0], &rest[1]);
-            validate_key_value(key, value)?;
             if global {
                 let path = global_config_path()?;
                 if let Some(p) = path.parent() {
@@ -262,8 +267,7 @@ pub fn config_cmd(args: &[String]) -> Result<i32> {
                 println!("{} {} = {} ({})", green("set"), key, value, path.display());
             } else {
                 let start = std::env::current_dir()?;
-                let path = find_rc_file(&start).unwrap_or_else(|| start.join(".zaprc.yaml"));
-                set_in_file(&path, key, value)?;
+                let path = set_project_key(&start, key, value)?;
                 println!("{} {} = {} ({})", green("set"), key, value, path.display());
             }
             Ok(0)
@@ -278,6 +282,16 @@ fn unknown_key(key: &str) -> Result<()> {
         key,
         CONFIG_KEYS.join(", ")
     )
+}
+
+/// insert or replace one key in the nearest project rc walking up from `root`
+/// (creating .zaprc.yaml when none exists) — the same set path
+/// `zap config <key> <value>` uses, returns the file written
+pub fn set_project_key(root: &Path, key: &str, value: &str) -> Result<PathBuf> {
+    validate_key_value(key, value)?;
+    let path = find_rc_file(root).unwrap_or_else(|| root.join(".zaprc.yaml"));
+    set_in_file(&path, key, value)?;
+    Ok(path)
 }
 
 fn validate_key_value(key: &str, value: &str) -> Result<()> {
@@ -457,6 +471,10 @@ fn apply_pairs(cfg: &mut Config, pairs: &[(String, String)], file: &Path) {
             }
             "lifecycle" | "lifecycles" | "enablescripts" | "enable_scripts" => {
                 cfg.lifecycle = is_truthy(&v);
+                true
+            }
+            "lifecycleallowall" | "lifecycle-allow-all" | "lifecycle_allow_all" => {
+                cfg.lifecycle_allow_all = is_truthy(&v);
                 true
             }
             "editor_node_modules" | "editornodemodules" | "editor-node-modules" => {

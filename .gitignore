@@ -2,6 +2,7 @@
 target/
 registry/target/
 src/cmds/gen.rs
+src/cmds/*/mod.rs
 
 # zap runtime
 .zap/

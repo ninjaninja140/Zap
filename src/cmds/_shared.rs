@@ -188,12 +188,26 @@ pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, S
     }
     if cfg.lifecycle {
         // npm order: root preinstall first, dependency lifecycles, then the
-        // root's own install/postinstall; workspace members get nothing
+        // root's own install/postinstall; workspace members get nothing.
+        // dep scripts are allowlist-gated (.zap-allow.json); the root's own
+        // are trusted user code, gated by `lifecycle: true` alone
+        let allow = crate::allow::load(root)?;
         let mut ran = run_root_lifecycle(root, &["preinstall"], &cfg);
-        ran += run_lifecycle(root, &tree, &cfg);
+        let (dep_ran, blocked) = run_lifecycle(root, &tree, &allow, &cfg);
+        ran += dep_ran;
         ran += run_root_lifecycle(root, &["install", "postinstall"], &cfg);
         if ran > 0 {
             println!("  {} {} lifecycle scripts", green("ran"), ran);
+        }
+        if blocked > 0 {
+            println!(
+                "  {} {} package{} lifecycle scripts but {} not allowlisted, {} to review",
+                yellow("note:"),
+                blocked,
+                if blocked == 1 { " has" } else { "s have" },
+                if blocked == 1 { "is" } else { "are" },
+                cyan("`zap allow`")
+            );
         }
     }
 
@@ -273,12 +287,14 @@ async fn materialize(
     Ok((fetched_count, fetched_bytes, linked_files))
 }
 
-/// opt-in dependency lifecycle scripts (config: `lifecycle: true`), never run
-/// by default; returns how many ran
-fn run_lifecycle(root: &Path, tree: &Tree, cfg: &Config) -> usize {
+/// opt-in dependency lifecycle scripts (config: `lifecycle: true`), gated by
+/// the package-hash allowlist, never run by default; returns (ran, blocked)
+/// where blocked counts packages with lifecycle scripts that the gate skipped
+fn run_lifecycle(root: &Path, tree: &Tree, allow: &crate::allow::AllowList, cfg: &Config) -> (usize, usize) {
     let vroot = root.join(".zap").join("v");
     let mut ran = 0usize;
-    for (id, _pkg) in &tree.packages {
+    let mut blocked = 0usize;
+    for (id, pkg) in &tree.packages {
         let dir = vroot.join(crate::util::pkg_dir_name(id));
         let Ok(v) = crate::util::read_json(&dir.join("package.json")) else {
             continue;
@@ -286,6 +302,16 @@ fn run_lifecycle(root: &Path, tree: &Tree, cfg: &Config) -> usize {
         let Some(scripts) = v.get("scripts").and_then(|x| x.as_object()) else {
             continue;
         };
+        let has_scripts = ["preinstall", "install", "postinstall"].iter().any(|s| scripts.contains_key(*s));
+        if !has_scripts {
+            continue;
+        }
+        // the tree carries the lockfile's recorded integrity per package id;
+        // trust-all (lifecycle-allow-all) bypasses the allowlist entirely
+        if crate::allow::dep_gate(cfg.lifecycle_allow_all, allow, id, Some(&pkg.integrity)) != crate::allow::Gate::Allowed {
+            blocked += 1;
+            continue;
+        }
         for stage in ["preinstall", "install", "postinstall"] {
             let Some(script) = scripts.get(stage).and_then(|x| x.as_str()) else {
                 continue;
@@ -295,7 +321,7 @@ fn run_lifecycle(root: &Path, tree: &Tree, cfg: &Config) -> usize {
             }
         }
     }
-    ran
+    (ran, blocked)
 }
 
 /// the root project's own install lifecycle hooks, same opt-in gate as deps
