@@ -1,0 +1,4 @@
+linker: node-modules
+strict: true
+concurrency: 8
+token: supersecret

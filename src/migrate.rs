@@ -344,6 +344,9 @@ pub fn migrate_cmd(args: &[String]) -> Result<i32> {
     }
 
     crate::cmds::install_in(&root, &[], Some(&mig.pins))?;
+    if let Some(state) = crate::cmds::ensure_gitignore(&root)? {
+        crate::cmds::print_gitignore_note(state);
+    }
 
     // cleanup: old lockfiles, node_modules, yarn/pnp state
     let existing: Vec<&PathBuf> = mig.artifacts.iter().filter(|p| p.exists()).collect();

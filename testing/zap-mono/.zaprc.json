@@ -1,0 +1,4 @@
+{
+  "$schema": "./.zap/zaprc.schema.json",
+  "linker": "pnp"
+}

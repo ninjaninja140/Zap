@@ -1,0 +1,9 @@
+{
+  "name": "@mono/lib",
+  "version": "1.0.0",
+  "main": "index.js",
+  "nameAliases": [
+    "@mono/lib-alias",
+    "mono-lib"
+  ]
+}

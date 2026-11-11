@@ -19,5 +19,12 @@ pub fn run(args: &[String]) -> Result<i32> {
         .clone();
     let passthrough: Vec<String> = args.iter().skip(1).cloned().collect();
     let (name, range) = crate::util::split_spec(&template);
-    dlx_run(&format!("create-{}", name), range, passthrough)
+    let code = dlx_run(&format!("create-{}", name), range, passthrough)?;
+    // the initializer finished scaffolding: give the project a .gitignore
+    // with the zap runtime entries (no-op outside git repos)
+    let root = std::env::current_dir()?;
+    if let Some(state) = crate::cmds::ensure_gitignore(&root)? {
+        crate::cmds::print_gitignore_note(state);
+    }
+    Ok(code)
 }

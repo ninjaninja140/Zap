@@ -1,0 +1,9 @@
+{
+  "name": "zap-bun",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "express": "^4.17.0",
+    "left-pad": "^1.3.0"
+  }
+}

@@ -1,0 +1,8 @@
+{
+  "name": "web",
+  "version": "1.0.0",
+  "dependencies": {
+    "@mono/lib": "workspace:*",
+    "chalk": "^5.0.0"
+  }
+}

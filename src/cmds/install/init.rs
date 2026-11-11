@@ -24,6 +24,9 @@ pub fn run(_args: &[String]) -> Result<i32> {
     let v = serde_json::json!({ "name": name, "version": "1.0.0", "private": true });
     std::fs::write(&p, format!("{}\n", serde_json::to_string_pretty(&v)?))?;
     println!("{} package.json", green("created"));
+    if let Some(state) = crate::cmds::ensure_gitignore(&root)? {
+        crate::cmds::print_gitignore_note(state);
+    }
     println!("next: {}", cyan("zap add <pkg>"));
     Ok(0)
 }

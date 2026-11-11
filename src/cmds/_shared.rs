@@ -709,3 +709,154 @@ pub fn why_project(root: &Path, target: &str) -> Result<i32> {
     }
     Ok(0)
 }
+
+// gitignore
+
+/// zap runtime entries a project's .gitignore should carry (mirrors zap's own
+/// repo .gitignore). `.zap-lock.json` is deliberately absent — lockfiles are
+/// committed for reproducibility
+const RUNTIME_IGNORES: [&str; 6] = [".zap/", "node_modules/", ".pnp.cjs", ".pnp.json", ".pnp.mjs", ".pnp-resolve.mjs"];
+
+/// make sure the project's .gitignore carries the zap runtime entries:
+/// appends only what's missing under a `# zap runtime` block; creates the
+/// file when a git repo exists (walking up), no-op otherwise so non-git
+/// dirs don't get littered. Ok(Some(state)) / Ok(None) for callers to note
+pub fn ensure_gitignore(root: &Path) -> Result<Option<&'static str>> {
+    let path = root.join(".gitignore");
+    let exists = path.is_file();
+    if !exists && !git_repo_above(root) {
+        return Ok(None);
+    }
+    let content = if exists { std::fs::read_to_string(&path)? } else { String::new() };
+    // trim-compare so `.zap` and `.zap/` both count as present
+    let have: Vec<String> = content
+        .lines()
+        .map(|l| l.trim().trim_end_matches('/').to_string())
+        .collect();
+    let missing: Vec<&str> = RUNTIME_IGNORES
+        .iter()
+        .copied()
+        .filter(|e| !have.contains(&e.trim_end_matches('/').to_string()))
+        .collect();
+    if missing.is_empty() {
+        return Ok(None);
+    }
+    let mut out = content;
+    if !out.is_empty() {
+        // sane trailing-newline state: append from a fresh line, blank line
+        // between the user's content and the zap block
+        if !out.ends_with('\n') {
+            out.push('\n');
+        }
+        if !out.ends_with("\n\n") {
+            out.push('\n');
+        }
+        out.push_str("# zap runtime\n");
+    } else {
+        out.push_str("# zap runtime state\n");
+    }
+    for entry in &missing {
+        out.push_str(entry);
+        out.push('\n');
+    }
+    std::fs::write(&path, out)?;
+    Ok(if exists { Some("updated") } else { Some("created") })
+}
+
+/// the one-line note callers print when ensure_gitignore did something
+pub fn print_gitignore_note(state: &str) {
+    if state == "created" {
+        println!("  {} .gitignore created", green("✓"));
+    } else {
+        println!("  {} .gitignore updated (zap runtime entries)", green("✓"));
+    }
+}
+
+/// is any ancestor of root (root itself included) a git repo? `.git` may be a
+/// dir or a file (worktrees/submodules); same walk style as find_root
+fn git_repo_above(root: &Path) -> bool {
+    let mut dir = Some(root.to_path_buf());
+    while let Some(d) = dir {
+        if d.join(".git").exists() {
+            return true;
+        }
+        dir = d.parent().map(|p| p.to_path_buf());
+    }
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn tempdir(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("zap-gitignore-{}-{}", tag, std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    #[test]
+    fn appends_only_the_missing_entries() {
+        let dir = tempdir("append");
+        std::fs::write(dir.join(".gitignore"), "node_modules/\n# build\ndist/").unwrap();
+        let state = ensure_gitignore(&dir).unwrap().unwrap();
+        assert_eq!(state, "updated");
+        let text = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert_eq!(text.matches("node_modules/").count(), 1, "existing entry not duplicated");
+        assert!(text.contains("# build") && text.contains("dist/"), "unrelated content intact");
+        assert!(text.contains("# zap runtime"));
+        for e in [".zap/", ".pnp.cjs", ".pnp.json", ".pnp.mjs", ".pnp-resolve.mjs"] {
+            assert!(text.contains(e), "{} appended", e);
+        }
+        // the no-trailing-newline source kept its content on its own line
+        assert!(text.contains("dist/\n\n# zap runtime"));
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn complete_file_is_a_noop() {
+        let dir = tempdir("noop");
+        std::fs::write(
+            dir.join(".gitignore"),
+            ".zap\nnode_modules\n.pnp.cjs\n.pnp.json\n.pnp.mjs\n.pnp-resolve.mjs\n",
+        )
+        .unwrap();
+        let before = std::fs::read(dir.join(".gitignore")).unwrap();
+        assert_eq!(ensure_gitignore(&dir).unwrap(), None);
+        assert_eq!(std::fs::read(dir.join(".gitignore")).unwrap(), before, "file untouched");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn creates_with_full_block_when_git_present() {
+        let dir = tempdir("create");
+        std::fs::create_dir_all(dir.join(".git")).unwrap();
+        assert_eq!(ensure_gitignore(&dir).unwrap().unwrap(), "created");
+        let text = std::fs::read_to_string(dir.join(".gitignore")).unwrap();
+        assert!(text.starts_with("# zap runtime state"));
+        assert_eq!(text.lines().count(), 7, "header + all six entries");
+        // idempotent: a second pass is a no-op
+        assert_eq!(ensure_gitignore(&dir).unwrap(), None);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn skips_non_git_dirs() {
+        let dir = tempdir("nogit");
+        assert_eq!(ensure_gitignore(&dir).unwrap(), None);
+        assert!(!dir.join(".gitignore").exists(), "nothing created");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn git_walks_up_to_the_nearest_repo() {
+        let base = tempdir("walk");
+        let deep = base.join("a/b/proj");
+        std::fs::create_dir_all(&deep).unwrap();
+        std::fs::create_dir_all(base.join(".git")).unwrap();
+        assert_eq!(ensure_gitignore(&deep).unwrap().unwrap(), "created");
+        assert!(deep.join(".gitignore").is_file());
+        let _ = std::fs::remove_dir_all(&base);
+    }
+}

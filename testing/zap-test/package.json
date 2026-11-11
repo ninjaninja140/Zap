@@ -1,0 +1,12 @@
+{
+  "name": "zap-test",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "chalk": "6.0.1",
+    "express": "5.3.0"
+  },
+  "scripts": {
+    "start": "node t.mjs"
+  }
+}

@@ -30,7 +30,7 @@ A tiny, fast, ts-first node package manager written in rust, with a custom plug'
 
 | command | what it does |
 |---|---|
-| `zap init` | create a package.json |
+| `zap init` | create a package.json (+ zap runtime ignores in .gitignore) |
 | `zap add <pkg>[@range]...` | add deps (`--dev`/`-D`; workspace member names auto-link as `workspace:*`) |
 | `zap remove <pkg>...` | remove deps |
 | `zap i[nstall]` | install root + workspaces, `--offline`, `--force`, `--refresh` |
@@ -40,7 +40,7 @@ A tiny, fast, ts-first node package manager written in rust, with a custom plug'
 | `zap <script>` | shorthand for run |
 | `zap exec <cmd> [args]` | run any command with the linker active |
 | `zap x\|dlx <pkg> [args]` | run a package's bin one-off (like npx) |
-| `zap create <tmpl> [args]` | scaffold via create-* initializers (like npm create) |
+| `zap create <tmpl> [args]` | scaffold via create-* initializers (like npm create); adds zap runtime ignores to the project's .gitignore |
 | `zap tsc [args]` | run the zap-managed typescript compiler |
 | `zap pack` | build an npm tarball |
 | `zap publish [--tag t] [--access a] [--otp c] [--dry-run]` | publish to the registry |
@@ -60,7 +60,7 @@ A tiny, fast, ts-first node package manager written in rust, with a custom plug'
 | `zap store [path\|size]` | inspect the global store |
 | `zap cache clean` | wipe store + caches |
 | `zap config [-g] [<key> [value]]` | read or set config (no rc file = new `.zaprc.yaml`) |
-| `zap migrate` | convert npm/yarn/pnpm/bun/deno projects to zap |
+| `zap migrate` | convert npm/yarn/pnpm/bun/deno projects to zap (+ zap runtime ignores in .gitignore) |
 | `zap allow [pkg...]` | allowlist packages whose lifecycle scripts may run (`--remove` to revoke) |
 | `zap skills` | inject zap usage into CLAUDE.md / AGENTS.md (`--remove` to strip) |
 

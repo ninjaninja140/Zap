@@ -1,0 +1,8 @@
+{
+  "name": "zap-reg-test",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "@mono/lib": "^1.0.0"
+  }
+}
