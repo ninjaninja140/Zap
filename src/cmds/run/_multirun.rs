@@ -164,13 +164,13 @@ pub fn run_multi(
         std::thread::spawn(move || run_stages(&pane, stages, &cwd, &env_root, linker, &ctrl));
     }
 
-    let (w, h) = term_size();
+    let (mut w, mut h) = term_size();
     let wordmark: Vec<&str> = WORDMARK.lines().collect();
     let n = plans.len();
     // the header is the wordmark plus a page-indicator row (always reserved,
     // dim 1/1 when everything fits on one page)
     let header_h = wordmark.len() + 1;
-    let l = layout(w, h, header_h, n);
+    let mut l = layout(w, h, header_h, n);
     let (key_tx, key_rx) = mpsc::channel::<Key>();
 
     // raw mode + alt screen; the guard restores both on every exit path
@@ -196,6 +196,7 @@ pub fn run_multi(
     let mut painted = vec![u64::MAX; n];
     let mut done_shown = vec![false; n];
     let mut hanging = false;
+    let mut tick = 0u32;
 
     'render: loop {
         // ~20 repaints/sec, the tick is the per-pane repaint throttle
@@ -214,11 +215,40 @@ pub fn run_multi(
                 _ => {}
             }
         }
+        // resize poll: the layout was computed once at start, so a mid-run
+        // resize would leave stale geometry; re-derive it when the window
+        // changed. buffers stay untouched (same tail, new geometry), the
+        // force repaint below re-seats every visible pane and the clear
+        // re-seats the wordmark
+        tick += 1;
+        let mut resized = false;
+        if size_poll_tick(tick, cfg!(windows)) {
+            let (nw, nh) = term_size();
+            if (nw, nh) != (w, h) {
+                (w, h) = (nw, nh);
+                l = layout(w, h, header_h, n);
+                if page + 1 > l.pages {
+                    page = l.pages - 1;
+                }
+                shown_page = usize::MAX; // force-repaint everything visible
+                resized = true;
+            }
+        }
         // a page switch repaints everything visible from the tail buffers, so
         // off-page panes show their latest state when you page to them
         let force = shown_page != page;
         let aborted = ctrl.aborted.load(Ordering::SeqCst);
         let mut out = String::new();
+        if resized {
+            // the old centering and pane rows are stale at the new size:
+            // clear once, re-seat the wordmark, the force branch repaints
+            // the rest into the new geometry
+            out.push_str("\x1b[2J");
+            for (i, line) in wordmark.iter().enumerate() {
+                let col = (w.saturating_sub(line.chars().count())) / 2 + 1;
+                out.push_str(&format!("\x1b[{};{}H\x1b[2K{}", i + 1, col, crate::util::electric(line)));
+            }
+        }
         if force {
             shown_page = page;
             out.push_str(&page_indicator(page, l.pages, w, header_h, hanging));
@@ -997,6 +1027,12 @@ fn plausible_window(w: usize, h: usize) -> bool {
     (1..=500).contains(&w) && (1..=200).contains(&h)
 }
 
+/// windows queries the console directly (cheap enough to check every tick);
+/// unix shells out to `stty` per poll, so there it's only every 10th tick
+fn size_poll_tick(tick: u32, direct_query: bool) -> bool {
+    direct_query || tick.is_multiple_of(10)
+}
+
 /// terminal size, std-only (+ one kernel32 call for the visible window)
 // shortcut: fallback chain COLUMNS/LINES env -> visible console window (windows srWindow) /
 // `stty size` (unix) -> `mode con` (windows) -> 80x24. mode con is second-to-last on windows
@@ -1217,6 +1253,55 @@ mod tests {
                 f.top + f.body_h + 1
             );
         }
+    }
+
+    #[test]
+    fn relayout_fits_the_resized_window() {
+        // a mid-run resize re-derives the layout: at every new size the
+        // recomputed frames must stay inside the new window (same content,
+        // new geometry)
+        for (w, h) in [(120usize, 40usize), (80, 20), (50, 12)] {
+            let l = layout(w, h, 2, 4);
+            for i in 0..4 {
+                let f = pane_frame(&l, 2, 0, i);
+                assert!(f.top >= 3, "pane {} header row below the wordmark at {}x{}", i, w, h);
+                assert!(
+                    f.left + f.w <= w,
+                    "pane {} right edge {} overflows {} cols at {}x{}",
+                    i,
+                    f.left + f.w,
+                    w,
+                    w,
+                    h
+                );
+                assert!(
+                    f.top + f.body_h + 1 <= h,
+                    "pane {} bottom row {} overflows {} rows at {}x{}",
+                    i,
+                    f.top + f.body_h + 1,
+                    h,
+                    w,
+                    h
+                );
+            }
+        }
+        // shrinking below one grid row paginates: the current page must be
+        // clamped into the new page count
+        let l = layout(50, 6, 2, 4); // pane_h 3, one pane row per page -> 2 pages
+        assert_eq!(l.pages, 2);
+        let page = 1.min(l.pages - 1);
+        assert_eq!(page, 1);
+        let l = layout(50, 5, 2, 4); // even tighter: still at least one page
+        assert!(l.pages >= 1);
+    }
+
+    #[test]
+    fn resize_poll_gate() {
+        // direct console queries (windows) poll every tick; stty-spawning
+        // unix polls every 10th tick
+        assert!(size_poll_tick(0, true) && size_poll_tick(7, true));
+        assert!(size_poll_tick(0, false) && size_poll_tick(10, false));
+        assert!(!size_poll_tick(1, false) && !size_poll_tick(9, false));
     }
 
     #[test]

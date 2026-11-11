@@ -26,18 +26,19 @@
 - [x] zap headings added
 - [x] multi-command
 - [x] lifecycle scripts sandboxing (allowlist by package hash)
-
+- [x] `zap outdated` interactive upgrade mode (yarn upgrade-interactive style)
+- [x] interactive upgrade targets: `-i` picker rows choose keep → latest-of-current-major → absolute latest (left/right cycles, table columns Package|Current|Latest Major|Latest); major bumps write `^<latest-major>` reusing add's manifest-write pattern
+- [x] `zap version` for real (currently an honest not-implemented stub): major|minor|patch|x.y.z bumps + git tag + changelog generation
 
 ## successful runs
 - [x] first real CI run on github (verifies macos + publishes artifacts)
 
 ## next up
 - [ ] node API for zap as a native npm package (napi-rs: install/add/remove/resolve/list/why/pack/publish)
-- [ ] `zap outdated` interactive upgrade mode (yarn upgrade-interactive style)
-- [ ] `zap version` for real (currently an honest not-implemented stub): major|minor|patch|x.y.z bumps + git tag + changelog generation
 - [ ] colour and make our terminal more fun? [in progress]
 - [ ] zap installer, try from zap.nn140.uk/versions/latest:dev:v0.0.0, if fail then try from github releases
 - [ ] "zap console" a tui for using zap for essentially an entire command window, only usable in non-cicd environments
+- [ ] zap multi-run commands need a input system per-terminal, so commands that need inputs can be used
 
 ## later / ideas
 - [ ] editor story for pnp: tsserver integration or pnpify-style wrapper

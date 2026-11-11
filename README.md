@@ -48,7 +48,8 @@ A tiny, fast, ts-first node package manager written in rust, with a custom plug'
 | `zap login` / `zap logout` | authenticate with (or clear credentials for) the registry |
 | `zap registry [add\|use\|list\|current]` | switch registries (private -> public flow) |
 | `zap upgrade [pkg...]` | no args: re-resolve in ranges; with args: bump to latest |
-| `zap outdated` | show deps behind the registry (exit 1 when outdated) |
+| `zap outdated` | show deps behind the registry (exit 1 when outdated); `-i` interactively picks upgrades — left/right cycles each package's target: keep (default) → latest of its major → absolute latest |
+| `zap version [major\|minor\|patch\|x.y.z]` | bump package.json version (+ git commit/tag `v*`, changelog entry; `--no-git-tag-version`, `-m <msg>`) |
 | `zap ls [--all]` | list deps + workspace members |
 | `zap why <pkg>` | dependency chains (`--project` scans source files) |
 | `zap view\|info <pkg>` | registry metadata for a package (cached) |
