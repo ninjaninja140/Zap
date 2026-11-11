@@ -26,6 +26,16 @@ pub fn lookup(name: &str) -> Option<&'static Command> {
     COMMANDS.iter().find(|c| c.name == name || c.aliases.contains(&name))
 }
 
+/// group name -> one-line description for the `zap help` category overview;
+/// build.rs owns which groups exist (gen.rs), this owns the human wording
+pub const GROUP_INFO: &[(&str, &str)] = &[
+    ("install", "project setup + dependency management"),
+    ("run", "scripts, executables and the ts compiler"),
+    ("info", "inspecting and auditing the dependency tree"),
+    ("publish", "npm registry protocol — pack, publish, auth"),
+    ("setup", "config, migration and AI-injection"),
+];
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -45,6 +55,24 @@ mod tests {
                 c.name
             );
             assert!(c.about.lines().count() >= 1 && c.usage.len() < c.about.len(), "{}: about is thinner than its usage", c.name);
+        }
+    }
+
+    /// the `zap help` category overview is driven by GROUP_INFO, so every
+    /// registry group must have an entry (and vice versa, no dead entries)
+    #[test]
+    fn group_info_covers_the_registry() {
+        for c in COMMANDS {
+            assert!(
+                GROUP_INFO.iter().any(|(g, _)| *g == c.group),
+                "{}: group '{}' missing from GROUP_INFO",
+                c.name,
+                c.group
+            );
+        }
+        for (g, desc) in GROUP_INFO {
+            assert!(COMMANDS.iter().any(|c| c.group == *g), "GROUP_INFO group '{}' has no commands", g);
+            assert!(!desc.is_empty(), "GROUP_INFO group '{}': empty description", g);
         }
     }
 }

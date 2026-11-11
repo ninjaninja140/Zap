@@ -129,10 +129,7 @@ fn run(args: &[String]) -> Result<i32> {
             println!("zap {}", VERSION);
             Ok(0)
         }
-        "help" | "-h" | "--help" => {
-            print_help();
-            Ok(0)
-        }
+        "help" | "-h" | "--help" => help_command(&rest),
         // registry dispatch: every command lives in src/cmds/<group>/<command>.rs
         _ => match cmds::lookup(cmd) {
             Some(c) => {
@@ -207,45 +204,184 @@ mod tests {
         assert!(!s.contains("aliases:"), "no aliases line when none exist");
         assert!(s.contains("zap outdated -i"), "outdated example present");
     }
+
+    #[test]
+    fn bare_help_is_categories_only() {
+        let s = categories_view();
+        assert!(s.contains("categories:"), "category overview");
+        assert!(s.contains("commands in one category"), "usage block");
+        assert!(s.contains("everything"), "usage block");
+        for (group, desc) in cmds::GROUP_INFO {
+            let count = cmds::COMMANDS.iter().filter(|c| c.group == *group).count();
+            assert!(s.contains(&format!("({} commands)", count)), "{}: live count", group);
+            assert!(s.contains(desc), "{}: description", group);
+        }
+        // zero command rows: no group headers, no alias pipes, no prose tail
+        assert!(!s.contains("install:"), "no group sections");
+        assert!(!s.contains('|'), "no command rows (aliases carry pipes)");
+        assert!(!s.contains("configuration"), "no prose sections");
+    }
+
+    #[test]
+    fn category_help_shows_only_that_group() {
+        let s = category_view("run");
+        assert!(s.contains("run:"), "group header");
+        assert!(s.contains("shortcut for `zap run`"), "implicit-run shortcut stays");
+        assert!(s.contains("see also: zap help --all"), "dim hint at the end");
+        let run = cmds::lookup("run").expect("run in registry");
+        assert!(s.contains(help_names(run).as_str()), "run row present");
+        assert!(!s.contains("install:"), "no other group sections");
+        assert!(!s.contains("publish:"), "no other group sections");
+        assert!(!s.contains("configuration"), "no prose sections");
+    }
+
+    #[test]
+    fn all_help_lists_every_row_and_the_prose() {
+        let s = full_help_view();
+        for c in cmds::COMMANDS {
+            // command_style paints "zap" and the name separately, so the plain
+            // "zap add" substring never exists; match the name+usage pieces
+            assert!(
+                s.contains(help_names(c).as_str()) && s.contains(c.usage),
+                "{} row present",
+                c.name
+            );
+        }
+        assert!(s.contains("configuration (walks up from cwd"), "config prose");
+        assert!(s.contains("typescript is built in:"), "ts prose");
+        assert!(!s.contains("categories:"), "the overview stays out of --all");
+    }
+
+    #[test]
+    fn unknown_category_error_lists_the_valid_ones() {
+        let s = help_unknown("nope");
+        assert!(s.contains("nope"), "echoes the bad name");
+        for (g, _) in cmds::GROUP_INFO {
+            assert!(s.contains(g), "lists valid category {}", g);
+        }
+    }
 }
 
-fn print_help() {
-    println!("{}", util::electric(banner()));
-    println!();
-    println!("{}", util::bold("usage:"));
-
-    // usage section generated from the command registry, one header per group
-    let width = cmds::COMMANDS.iter().map(|c| help_names(c).len()).max().unwrap_or(0);
-    let mut last_group = "";
-    for c in cmds::COMMANDS {
-        if c.group != last_group {
-            if last_group == "run" {
-                // the implicit-run shortcut stays visible under the run section
-                println!("{}", command_style("  zap <script> [args]        shortcut for `zap run`"));
-            }
-            println!();
-            println!("{}", util::bold(format!("{}:", c.group)));
-            last_group = c.group;
+/// `zap help`: bare = category overview, `--all` = the full grouped listing,
+/// `<category>` = just that group's section. `--help`/`-h` among the args
+/// keep the bare view (help itself is not a registry command)
+fn help_command(rest: &[String]) -> Result<i32> {
+    let arg = rest.iter().map(|s| s.as_str()).find(|a| *a != "--help" && *a != "-h");
+    match arg {
+        None => {
+            // views carry their own trailing newline, print! keeps the exact bytes
+            print!("{}", categories_view());
+            Ok(0)
         }
-        let names = help_names(c);
-        let pad = " ".repeat(width - names.len());
-        println!("{}", command_style(&format!("  zap {}{}  {}", names, pad, c.usage)));
+        Some("--all") => {
+            print!("{}", full_help_view());
+            Ok(0)
+        }
+        Some(name) => {
+            if cmds::GROUP_INFO.iter().any(|(g, _)| *g == name) {
+                print!("{}", category_view(name));
+                Ok(0)
+            } else {
+                Err(anyhow::anyhow!(help_unknown(name)))
+            }
+        }
+    }
+}
+
+/// the unknown-category error, listing the valid categories
+fn help_unknown(name: &str) -> String {
+    format!(
+        "unknown help category '{}', valid categories: {}",
+        name,
+        cmds::GROUP_INFO.iter().map(|(g, _)| *g).collect::<Vec<_>>().join(", ")
+    )
+}
+
+/// `zap help`: the category overview only — banner, help usage, one line per
+/// group with a live command count from the registry
+fn categories_view() -> String {
+    let mut out = format!("{}\n\n{}\n", util::electric(banner()), util::bold("usage:"));
+    out.push_str(&format!(
+        "{}\n",
+        command_style("  zap help [category]        commands in one category")
+    ));
+    out.push_str(&format!("{}\n", command_style("  zap help --all             everything")));
+    out.push_str(&format!("\n{}\n", util::bold("categories:")));
+    let width = cmds::GROUP_INFO.iter().map(|(g, _)| g.len()).max().unwrap_or(0);
+    for (group, desc) in cmds::GROUP_INFO {
+        let count = cmds::COMMANDS.iter().filter(|c| c.group == *group).count();
+        let pad = " ".repeat(width - group.len());
+        out.push_str(&format!("  {}{}  {} ({} commands)\n", util::bold(group), pad, desc, count));
+    }
+    out
+}
+
+/// `zap help <category>`: banner plus only that group's section, rendered
+/// exactly as its slice of the full help, ending with a see-also hint
+fn category_view(group: &str) -> String {
+    let mut out = format!("{}\n\n", util::electric(banner()));
+    out.push_str(&group_section(group));
+    out.push_str(&format!("\n{}\n", util::dim("see also: zap help --all")));
+    out
+}
+
+/// `zap help --all`: today's full grouped listing, unchanged
+fn full_help_view() -> String {
+    let mut out = format!("{}\n\n{}\n", util::electric(banner()), util::bold("usage:"));
+
+    // groups in registry order, one blank line before each section
+    let mut groups: Vec<&str> = Vec::new();
+    for c in cmds::COMMANDS {
+        if !groups.contains(&c.group) {
+            groups.push(c.group);
+        }
+    }
+    for group in groups {
+        out.push('\n');
+        out.push_str(&group_section(group));
     }
 
     // static configuration/typescript sections stay hand-written
-    println!();
-    println!("{}", util::bold("configuration (walks up from cwd, first match wins):"));
+    out.push('\n');
+    out.push_str(&format!(
+        "{}\n",
+        util::bold("configuration (walks up from cwd, first match wins):")
+    ));
     for line in CONFIG_SECTION.lines() {
-        println!("{}", zap_refs(line));
+        out.push_str(&format!("{}\n", zap_refs(line)));
     }
-    println!();
-    println!(
-        "{} {} a tsconfig.json (or `typescript: 5.9.2` in .zaprc) makes zap",
+    out.push('\n');
+    out.push_str(&format!(
+        "{} {} a tsconfig.json (or `typescript: 5.9.2` in .zaprc) makes zap\n",
         ts_badge(),
         util::bold("typescript is built in:")
-    );
-    println!("manage the compiler + @types/* for deps that don't ship types. `zap version <ver>`");
-    println!("pins the compiler version; version changes install automatically.");
+    ));
+    out.push_str("manage the compiler + @types/* for deps that don't ship types. `zap version <ver>`\n");
+    out.push_str("pins the compiler version; version changes install automatically.\n");
+    out
+}
+
+/// one group's usage section exactly as it appears in the full help: group
+/// header, command rows, and the implicit-run shortcut under the run section
+fn group_section(group: &str) -> String {
+    let entries: Vec<&cmds::Command> = cmds::COMMANDS.iter().filter(|c| c.group == group).collect();
+    // rows align to the global name width across every group, matching the
+    // full listing column-for-column
+    let width = cmds::COMMANDS.iter().map(|c| help_names(c).len()).max().unwrap_or(0);
+    let mut out = format!("{}\n", util::bold(format!("{}:", group)));
+    for c in entries {
+        let names = help_names(c);
+        let pad = " ".repeat(width - names.len());
+        out.push_str(&format!("{}\n", command_style(&format!("  zap {}{}  {}", names, pad, c.usage))));
+    }
+    if group == "run" {
+        // the implicit-run shortcut stays visible under the run section
+        out.push_str(&format!(
+            "{}\n",
+            command_style("  zap <script> [args]        shortcut for `zap run`")
+        ));
+    }
+    out
 }
 
 /// primary name plus aliases, e.g. "run|run-script|r|task"
