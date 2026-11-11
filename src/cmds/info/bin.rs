@@ -8,6 +8,11 @@ use crate::workspace::install_root_for;
 pub const NAME: &str = "bin";
 pub const ALIASES: &[&str] = &[];
 pub const USAGE: &str = "print bin paths from the dependency tree";
+pub const ABOUT: &str = "prints the paths of binaries the dependency tree provides (name, path
+pairs); a name argument narrows to one. use it to wire up PATH or debug a
+missing bin.";
+pub const EXAMPLE: &str = "  $ zap bin tsc
+  print where the tsc bin lives in the tree";
 
 pub fn run(args: &[String]) -> Result<i32> {
     let ctx = crate::util::find_root()?;

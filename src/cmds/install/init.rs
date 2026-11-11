@@ -6,6 +6,10 @@ use crate::util::{cyan, green};
 pub const NAME: &str = "init";
 pub const ALIASES: &[&str] = &[];
 pub const USAGE: &str = "create a package.json";
+pub const ABOUT: &str = "writes a minimal package.json (name taken from the folder) into the
+current directory so `zap install` has something to chew on.";
+pub const EXAMPLE: &str = "  $ zap init
+  bootstrap a package.json, then `zap install` to fill the tree";
 
 pub fn run(_args: &[String]) -> Result<i32> {
     let root = std::env::current_dir()?;

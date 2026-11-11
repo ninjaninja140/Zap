@@ -8,6 +8,11 @@ use crate::util::green;
 pub const NAME: &str = "cache";
 pub const ALIASES: &[&str] = &[];
 pub const USAGE: &str = "wipe the global store, metadata cache and dlx cache";
+pub const ABOUT: &str = "wipes the global content-addressable store, the registry metadata
+cache and the dlx cache, the reset button when a corrupted artifact makes
+installs misbehave.";
+pub const EXAMPLE: &str = "  $ zap cache clean
+  drop all local caches; the next install refetches";
 
 pub fn run(args: &[String]) -> Result<i32> {
     match args.first().map(|s| s.as_str()) {

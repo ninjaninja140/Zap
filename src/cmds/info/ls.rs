@@ -9,6 +9,10 @@ use crate::workspace::install_root_for;
 pub const NAME: &str = "ls";
 pub const ALIASES: &[&str] = &["list"];
 pub const USAGE: &str = "list dependencies and workspace members";
+pub const ABOUT: &str = "lists the direct dependencies (prod + dev) and workspace members with
+their resolved versions; --all expands to the full tree.";
+pub const EXAMPLE: &str = "  $ zap ls --all
+  list the whole dependency tree, workspaces included";
 
 pub fn run(args: &[String]) -> Result<i32> {
     let all = args.iter().any(|a| a == "--all" || a == "-a");

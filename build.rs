@@ -3,7 +3,7 @@
 // mod.rs form (no #[path] tricks) is deliberate: the previous generated form
 // nested the commands in inline modules (`pub mod install { #[path =
 // "../../install/add.rs"] ... }`) whose relative paths only resolve where the
-// platform lexically normalizes `..` — windows does, posix walks every path
+// platform lexically normalizes `..`, windows does, posix walks every path
 // component and trips over the virtual src/cmds/gen/<group>/ dir that doesn't
 // exist on disk
 
@@ -73,8 +73,8 @@ fn gen(groups: &[(String, Vec<String>)]) -> String {
     for (group, cmds) in groups {
         for c in cmds {
             out.push_str(&format!(
-                "    Command {{ name: {}::{}::NAME, aliases: {}::{}::ALIASES, usage: {}::{}::USAGE, group: \"{}\", run: {}::{}::run }},\n",
-                group, c, group, c, group, c, group, group, c
+                "    Command {{ name: {}::{}::NAME, aliases: {}::{}::ALIASES, usage: {}::{}::USAGE, about: {}::{}::ABOUT, example: {}::{}::EXAMPLE, group: \"{}\", run: {}::{}::run }},\n",
+                group, c, group, c, group, c, group, c, group, c, group, group, c
             ));
         }
     }

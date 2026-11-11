@@ -47,8 +47,8 @@ A tiny, fast, ts-first node package manager written in rust, with a custom plug'
 | `zap whoami` | print the authenticated user |
 | `zap login` / `zap logout` | authenticate with (or clear credentials for) the registry |
 | `zap registry [add\|use\|list\|current]` | switch registries (private -> public flow) |
-| `zap upgrade [pkg...]` | no args: re-resolve in ranges; with args: bump to latest |
-| `zap outdated` | show deps behind the registry (exit 1 when outdated); `-i` interactively picks upgrades — left/right cycles each package's target: keep (default) → latest of its major → absolute latest |
+| `zap upgrade [pkg...]` | no args: re-resolve in ranges; with args: bump to latest; `-i`: pick exact versions per package (no args: all-packages interactive upgrader) |
+| `zap outdated` | show deps behind the registry (exit 1 when outdated); `-i` interactively picks upgrades, left/right cycles each package's target: keep (default) → latest of its major → absolute latest |
 | `zap version [major\|minor\|patch\|x.y.z]` | bump package.json version (+ git commit/tag `v*`, changelog entry; `--no-git-tag-version`, `-m <msg>`) |
 | `zap ls [--all]` | list deps + workspace members |
 | `zap why <pkg>` | dependency chains (`--project` scans source files) |
@@ -63,6 +63,9 @@ A tiny, fast, ts-first node package manager written in rust, with a custom plug'
 | `zap migrate` | convert npm/yarn/pnpm/bun/deno projects to zap |
 | `zap allow [pkg...]` | allowlist packages whose lifecycle scripts may run (`--remove` to revoke) |
 | `zap skills` | inject zap usage into CLAUDE.md / AGENTS.md (`--remove` to strip) |
+
+every command also takes `--help` (`zap install --help`, `zap bump --help`): its usage, a
+short explanation and an example use case, in place.
 
 ## running scripts
 
@@ -88,16 +91,16 @@ installs run your root project's own `preinstall`/`install`/`postinstall` in npm
 dependency scripts run **only for allowlisted packages**: a package's id and integrity hash
 must match an entry in `.zap-allow.json` (next to package.json, commit it).
 
-- `zap allow` — list allowlisted packages + any resolved packages with scripts still pending
-- `zap allow <pkg>...` — approve (records the lockfile's hash; a dep bump = new hash = scripts
+- `zap allow`, list allowlisted packages + any resolved packages with scripts still pending
+- `zap allow <pkg>...`, approve (records the lockfile's hash; a dep bump = new hash = scripts
   blocked again until re-approved)
-- `zap allow --remove <pkg>...` — revoke
+- `zap allow --remove <pkg>...`, revoke
 
 a package with lifecycle scripts that isn't allowlisted is skipped with a one-line note at
 install. workspace members never get lifecycle runs.
 
 trust everything instead? `zap allow --all` sets `lifecycle-allow-all: true` in your `.zaprc`
-and deletes the allowlist file — every package's scripts run, no gate. `zap allow --remove
+and deletes the allowlist file, every package's scripts run, no gate. `zap allow --remove
 --all` reverts to hash-verified mode.
 
 ## configuration

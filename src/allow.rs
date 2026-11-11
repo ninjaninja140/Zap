@@ -60,7 +60,7 @@ pub fn dep_gate(allow_all: bool, list: &AllowList, id: &str, recorded: Option<&s
     gate(list, id, recorded)
 }
 
-/// `zap allow --all`: trust-all on — writes `lifecycle-allow-all: true`
+/// `zap allow --all`: trust-all on, writes `lifecycle-allow-all: true`
 /// through the config system's project set path and deletes the (now
 /// pointless) .zap-allow.json; returns (rc file written, file removed?)
 pub fn trust_all(root: &Path) -> Result<(PathBuf, bool)> {
@@ -75,7 +75,7 @@ pub fn trust_all(root: &Path) -> Result<(PathBuf, bool)> {
     Ok((rc, removed))
 }
 
-/// `zap allow --remove --all`: trust-all off — written as `false` through the
+/// `zap allow --remove --all`: trust-all off, written as `false` through the
 /// same config path (there is no key-removal path and hand-rolling one would
 /// break the don't-edit-rc-files-by-hand rule); any .zap-allow.json is left
 /// alone and regains its meaning

@@ -13,6 +13,14 @@ use std::path::Path;
 pub const NAME: &str = "run";
 pub const ALIASES: &[&str] = &["run-script", "r", "task"];
 pub const USAGE: &str = "run package.json scripts (several names run in live panes, args after `--` go to each)";
+pub const ABOUT: &str = "runs one or more package.json scripts; several names run concurrently
+in split-screen panes. literal pre<script>/post<script> hooks fire around
+each script, and args after `--` are appended to every script. unknown
+command names fall through here, so `zap test` runs the test script.";
+pub const EXAMPLE: &str = "  $ zap run build
+  run one script (pre/post hooks fire)
+  $ zap run api worker
+  run both scripts concurrently, one pane each";
 
 pub fn run(args: &[String]) -> Result<i32> {
     let ctx = crate::util::find_root()?;

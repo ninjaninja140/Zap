@@ -24,8 +24,12 @@ fn ts_badge() -> String {
     "\x1b[48;2;49;120;198m\x1b[97m TS \x1b[0m".to_string()
 }
 
-/// the per-command heading from zap.heading.txt
-fn print_heading(args: &[String]) {
+/// the styled per-command heading block (emblem line, strip, badge+usage,
+/// full command), the same replacement order as always, with
+/// FULL_COMMAND before COMMAND ("COMMAND" is a substring of it). shared by
+/// print_heading and the interactive uis, which paint it inside their alt
+/// screen so it stays visible during interaction
+pub fn heading_block(args: &[String]) -> String {
     let cmd = args.first().map(|s| s.as_str()).unwrap_or("");
     // usage text comes from the command's own file; flag-only commands
     // (version) aren't registry commands, unknown names are implicit
@@ -48,15 +52,19 @@ fn print_heading(args: &[String]) {
     // the full command as typed, greyed out under the header ("zap" prefix is
     // already implied by the header itself, so it's omitted here)
     let styled_full = util::dim(format!("> {}", args.join(" ")));
-    let output = HEADING
+    HEADING
         .replace("🗲", &format!("\x1b[38;2;49;86;255m🗲\x1b[0m"))
         .replace("zap", styled_zap)
         .replace("v0.0.0", &format!("v{}", VERSION))
         // FULL_COMMAND first, "COMMAND" is a substring of it
         .replace("> FULL_COMMAND", &styled_full)
         .replace("COMMAND", &styled_cmd)
-        .replace("USAGE", &styled_usage);
-    println!("{}", output);
+        .replace("USAGE", &styled_usage)
+}
+
+/// the per-command heading from zap.heading.txt
+fn print_heading(args: &[String]) {
+    println!("{}", heading_block(args));
 }
 
 fn banner() -> String {
@@ -127,10 +135,77 @@ fn run(args: &[String]) -> Result<i32> {
         }
         // registry dispatch: every command lives in src/cmds/<group>/<command>.rs
         _ => match cmds::lookup(cmd) {
-            Some(c) => (c.run)(&rest),
+            Some(c) => {
+                // `zap <cmd> --help` / -h: the command's own help view, under
+                // the per-command heading that already printed above. help
+                // wins over any other args; unknown names and bare `--help`
+                // keep their old paths
+                if rest.iter().any(|a| a == "--help" || a == "-h") {
+                    println!("{}", command_help(c));
+                    return Ok(0);
+                }
+                (c.run)(&rest)
+            }
             // implicit run: `zap test` == `zap run test` (also covers bare `zap`)
             None => crate::cmds::run::run::run(args),
         },
+    }
+}
+
+/// `zap <cmd> --help`: the command's own usage view, bold name, dim short
+/// usage, the about paragraph, aliases when present, then the example block
+/// with the `$` prompt in electric and explanation lines dim. pure so the
+/// rendering test can share it
+fn command_help(c: &cmds::Command) -> String {
+    let mut out = String::new();
+    out.push_str(&format!("{}, {}\n", util::bold(c.name.to_uppercase()), util::dim(c.usage)));
+    out.push_str(&format!("{}\n", c.about));
+    if !c.aliases.is_empty() {
+        out.push_str(&format!("{}\n", util::dim(format!("aliases: {}", c.aliases.join(", ")))));
+    }
+    out.push_str(&format!("{}\n", util::dim("example:")));
+    for line in c.example.lines() {
+        if let Some(rest) = line.trim_start().strip_prefix("$ ") {
+            out.push_str(&format!("  {} {}\n", util::electric("$"), rest));
+        } else {
+            out.push_str(&format!("{}\n", util::dim(line.trim_start())));
+        }
+    }
+    out
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn heading_block_holds_all_four_lines() {
+        let args = vec![
+            "upgrade".to_string(),
+            "--interactive".to_string(),
+            "chalk".to_string(),
+        ];
+        let s = heading_block(&args);
+        assert_eq!(s.lines().count(), 4, "emblem, strip, badge, full command");
+        assert!(s.contains("UPGRADE"), "the badge collapses to the canonical name");
+        assert!(s.contains("> upgrade --interactive chalk"), "full command as typed");
+        assert!(s.contains("no args: re-resolve"), "usage from the registry");
+    }
+
+    #[test]
+    fn help_view_renders_every_section() {        let c = cmds::lookup("install").expect("install in registry");
+        let s = command_help(c);
+        assert!(s.contains("INSTALL"), "bold uppercased name");
+        assert!(s.contains("aliases: i"), "aliases listed when present");
+        assert!(s.contains("example:"), "example label");
+        // the `$` prompt renders electric, so the plain sequence is split
+        assert!(s.contains(&util::electric("$")), "electric prompt");
+        assert!(s.contains("zap install --frozen-lockfile"), "the example invocation");
+        // alias-free commands hide the aliases line entirely
+        let c = cmds::lookup("outdated").expect("outdated in registry");
+        let s = command_help(c);
+        assert!(!s.contains("aliases:"), "no aliases line when none exist");
+        assert!(s.contains("zap outdated -i"), "outdated example present");
     }
 }
 

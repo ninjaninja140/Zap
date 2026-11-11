@@ -9,6 +9,10 @@ use crate::workspace::install_root_for;
 pub const NAME: &str = "remove";
 pub const ALIASES: &[&str] = &["rm", "uninstall"];
 pub const USAGE: &str = "remove dependencies";
+pub const ABOUT: &str = "drops named deps from package.json (dev deps from their own section),
+unlinks them from the tree and re-installs. aliases: rm, uninstall.";
+pub const EXAMPLE: &str = "  $ zap remove chalk
+  remove chalk from the manifest and prune the tree";
 
 pub fn run(args: &[String]) -> Result<i32> {
     let names: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();

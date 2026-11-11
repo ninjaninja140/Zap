@@ -8,6 +8,11 @@ use crate::config::Config;
 pub const NAME: &str = "store";
 pub const ALIASES: &[&str] = &[];
 pub const USAGE: &str = "inspect the global content-addressable store";
+pub const ABOUT: &str = "inspects the global content-addressable store: `zap store size` sums
+the disk usage, `zap store path <name>` prints where a package's content
+lives.";
+pub const EXAMPLE: &str = "  $ zap store size
+  show how much disk the global store holds";
 
 pub fn run(args: &[String]) -> Result<i32> {
     let cfg = Config::load(&std::env::current_dir()?);

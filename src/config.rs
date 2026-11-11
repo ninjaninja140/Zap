@@ -285,7 +285,7 @@ fn unknown_key(key: &str) -> Result<()> {
 }
 
 /// insert or replace one key in the nearest project rc walking up from `root`
-/// (creating .zaprc.yaml when none exists) — the same set path
+/// (creating .zaprc.yaml when none exists), the same set path
 /// `zap config <key> <value>` uses, returns the file written
 pub fn set_project_key(root: &Path, key: &str, value: &str) -> Result<PathBuf> {
     validate_key_value(key, value)?;

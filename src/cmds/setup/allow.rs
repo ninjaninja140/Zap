@@ -9,6 +9,12 @@ pub const NAME: &str = "allow";
 pub const ALIASES: &[&str] = &[];
 pub const USAGE: &str =
     "allowlist packages whose lifecycle scripts may run (lifecycle: true); --all trusts everything, --remove --all reverts";
+pub const ABOUT: &str = "review and approve packages whose install scripts would run (only with
+`lifecycle: true` in .zaprc). approvals are recorded per package id +
+integrity hash in .zap-allow.json; --all trusts every script and removes
+the allowlist, --remove --all reverts to gated mode.";
+pub const EXAMPLE: &str = "  $ zap allow --all
+  trust every dependency's lifecycle scripts from now on";
 
 pub fn run(args: &[String]) -> Result<i32> {
     let root = crate::util::find_root()?;
@@ -48,12 +54,12 @@ pub fn run(args: &[String]) -> Result<i32> {
     add(&root, &mut list, &pkgs)
 }
 
-/// --all: trust every package — the rc key goes through the config system's
+/// --all: trust every package, the rc key goes through the config system's
 /// own project set path, the (now pointless) allowlist file is deleted
 fn trust_all_on(root: &Path) -> Result<i32> {
     let (rc, removed) = crate::allow::trust_all(root)?;
     println!(
-        "{} allow-all on: {} in {} — .zap-allow.json: {}",
+        "{} allow-all on: {} in {}, .zap-allow.json: {}",
         crate::util::green("✓"),
         crate::util::cyan("lifecycle-allow-all"),
         rc.file_name().and_then(|s| s.to_str()).unwrap_or("?"),

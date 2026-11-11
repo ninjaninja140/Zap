@@ -4,6 +4,11 @@
 pub const NAME: &str = "config";
 pub const ALIASES: &[&str] = &[];
 pub const USAGE: &str = "read or set config (global with -g; no rc = new .zaprc.yaml)";
+pub const ABOUT: &str = "read or write .zaprc keys: `zap config linker` prints one, `zap config
+linker node-modules` sets it, bare lists everything. -g targets the global
+config; with no rc file yet, the first write creates .zaprc.yaml.";
+pub const EXAMPLE: &str = "  $ zap config linker node-modules
+  switch the linker (persists in .zaprc.yaml)";
 
 pub fn run(args: &[String]) -> anyhow::Result<i32> {
     crate::config::config_cmd(args)

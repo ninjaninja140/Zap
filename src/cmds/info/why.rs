@@ -11,6 +11,11 @@ use crate::workspace::install_root_for;
 pub const NAME: &str = "why";
 pub const ALIASES: &[&str] = &[];
 pub const USAGE: &str = "show dependency chains for a package (--project scans source files)";
+pub const ABOUT: &str = "shows every chain that pulls a package into the tree, root dep,
+transitive or workspace link. --project additionally greps your source files
+for imports so you see what actually references it.";
+pub const EXAMPLE: &str = "  $ zap why chalk
+  print the dependency chains ending at chalk";
 
 pub fn run(args: &[String]) -> Result<i32> {
     let project = args.iter().any(|a| a == "--project");

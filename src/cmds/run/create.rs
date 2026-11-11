@@ -7,6 +7,10 @@ use crate::cmds::dlx_run;
 pub const NAME: &str = "create";
 pub const ALIASES: &[&str] = &[];
 pub const USAGE: &str = "scaffold with a create-* initializer (like npm create)";
+pub const ABOUT: &str = "scaffolds a project with a create-* initializer's bin, exactly like
+npm create: `zap create vite my-app` runs create-vite.";
+pub const EXAMPLE: &str = "  $ zap create vite my-app
+  scaffold a vite project with create-vite";
 
 pub fn run(args: &[String]) -> Result<i32> {
     let template = args

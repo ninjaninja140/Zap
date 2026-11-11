@@ -11,6 +11,11 @@ use crate::workspace::install_root_for;
 pub const NAME: &str = "add";
 pub const ALIASES: &[&str] = &["a"];
 pub const USAGE: &str = "add dependencies (supports --dev; workspace deps auto-link)";
+pub const ABOUT: &str = "adds deps to package.json and installs them in the same pass. specs are
+`name`, `name@range` or `name@latest`; packages that are workspace members
+link as `workspace:*`. --dev (or -D) records into devDependencies.";
+pub const EXAMPLE: &str = "  $ zap add chalk --dev
+  add chalk to devDependencies and install it";
 
 pub fn run(args: &[String]) -> Result<i32> {
     let is_dev = args.iter().any(|a| a == "--dev" || a == "-D");

@@ -19,7 +19,7 @@
 - [x] multi-run: `zap run a b c` runs all listed scripts concurrently in a split-pane alternate-screen view (`zap.text.txt` wordmark, per-pane status/exit codes), args after `--` go to every script
 - [x] npm-style pre/post script hooks: literal `pre<script>`/`post<script>` run around every `zap run`
 - [x] root project lifecycle scripts during install (`preinstall`/`install`/`postinstall`, npm order, opt-in `lifecycle: true` alongside dep lifecycles)
-- [x] lifecycle scripts sandboxing: `.zap-allow.json` hash allowlist — with `lifecycle: true`, only packages whose pkg-id + integrity hash are allowlisted (via `zap allow`) run their scripts; root lifecycle unaffected
+- [x] lifecycle scripts sandboxing: `.zap-allow.json` hash allowlist, with `lifecycle: true`, only packages whose pkg-id + integrity hash are allowlisted (via `zap allow`) run their scripts; root lifecycle unaffected
 - [x] `zap allow --all`: trust-all mode (`lifecycle-allow-all` in .zaprc, allowlist file removed) + `zap allow --remove --all` to revert
 - [x] extra: move commands system to file-based handler system
 - [x] extra: categorised commands in help menu
@@ -28,6 +28,7 @@
 - [x] lifecycle scripts sandboxing (allowlist by package hash)
 - [x] `zap outdated` interactive upgrade mode (yarn upgrade-interactive style)
 - [x] interactive upgrade targets: `-i` picker rows choose keep → latest-of-current-major → absolute latest (left/right cycles, table columns Package|Current|Latest Major|Latest); major bumps write `^<latest-major>` reusing add's manifest-write pattern
+- [x] `zap upgrade --interactive`: with package names, a per-package exact-version picker (all registry versions, newest first, prereleases dim but selectable, buffered picks, one install pass); without names, opens the all-packages three-target upgrader; bare `zap upgrade` unchanged
 - [x] `zap version` for real (currently an honest not-implemented stub): major|minor|patch|x.y.z bumps + git tag + changelog generation
 
 ## successful runs

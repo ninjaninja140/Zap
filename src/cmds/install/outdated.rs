@@ -11,9 +11,20 @@ use crate::workspace::install_root_for;
 #[path = "_sel.rs"]
 mod sel;
 
+// re-exports so upgrade.rs can share the picker machinery without including
+// _sel.rs twice (which would double-compile the module and fork its types)
+pub use sel::{console_available, pick_version, sort_versions};
+
 pub const NAME: &str = "outdated";
 pub const ALIASES: &[&str] = &[];
 pub const USAGE: &str = "show deps behind the registry (exit 1 if any); -i picks targets (keep / latest-of-major / latest)";
+pub const ABOUT: &str = "shows every locked dep that's behind the registry with its severity
+(outdated / major behind) and exits 1 when anything is stale, so it drops
+straight into CI. -i opens a raw-mode selector: each dep gets a three-way
+target, keep the current version, bump to the latest of its major, or jump
+to the absolute latest.";
+pub const EXAMPLE: &str = "  $ zap outdated -i
+  pick per-dep targets (current / latest-of-major / latest) and apply";
 
 // one checked dep: identity + what the registry said
 #[derive(Clone)]
@@ -30,16 +41,22 @@ pub fn run(args: &[String]) -> Result<i32> {
     let ui = args.iter().any(|a| a == "--interactive" || a == "-i");
     let ctx = crate::util::find_root()?;
     let root = install_root_for(&ctx);
+    let cfg = Config::load(&root);
+    if ui {
+        // the interactive flow is shared with `zap upgrade --interactive`
+        // (no names); it re-reads the lockfile itself. the heading block is
+        // built from the canonical name + the args as typed (run() only
+        // sees the args after the command name)
+        let mut full = vec![NAME.to_string()];
+        full.extend(args.iter().cloned());
+        return interactive_upgrade(&root, &cfg, &crate::heading_block(&full));
+    }
     let lock = crate::lockfile::read(&root.join(".zap-lock.json"))?
         .ok_or_else(|| anyhow::anyhow!("no .zap-lock.json, run `zap install` first"))?;
-    let cfg = Config::load(&root);
     let rows = collect(&root, &lock, &cfg)?;
     if rows.is_empty() {
         println!("{}", dim("no dependencies to check"));
         return Ok(0);
-    }
-    if ui {
-        return interactive(&root, &cfg, &rows);
     }
 
     let width = rows.iter().map(|r| r.name.len()).max().unwrap_or(6).max("package".len());
@@ -73,9 +90,24 @@ pub fn run(args: &[String]) -> Result<i32> {
     Ok(if any_outdated { 1 } else { 0 })
 }
 
+/// the three-target all-packages flow, shared by `zap outdated -i` and
+/// `zap upgrade --interactive` (no names). it lives in this module because
+/// _sel.rs is #[path]-included HERE; including it from upgrade.rs too would
+/// double-compile the module and fork its types
+pub fn interactive_upgrade(root: &Path, cfg: &Config, heading: &str) -> Result<i32> {
+    let lock = crate::lockfile::read(&root.join(".zap-lock.json"))?
+        .ok_or_else(|| anyhow::anyhow!("no .zap-lock.json, run `zap install` first"))?;
+    let rows = collect(root, &lock, cfg)?;
+    if rows.is_empty() {
+        println!("{}", dim("no dependencies to check"));
+        return Ok(0);
+    }
+    interactive(root, cfg, &rows, heading)
+}
+
 /// the --interactive flow: pick a target per outdated root dep in the
 /// selector, then bump them through the normal paths
-fn interactive(root: &Path, cfg: &Config, rows: &[Row]) -> Result<i32> {
+fn interactive(root: &Path, cfg: &Config, rows: &[Row], heading: &str) -> Result<i32> {
     let is_outdated = |r: &Row| !r.latest.is_empty() && r.latest != "?" && r.latest != r.current;
     // only root-manifest deps can be bumped from here: workspace links are
     // upgraded in their member project, so they stay out of the list
@@ -89,7 +121,7 @@ fn interactive(root: &Path, cfg: &Config, rows: &[Row]) -> Result<i32> {
         if ws_skipped > 0 {
             println!(
                 "{}",
-                dim(format!("{} workspace dep(s) outdated — upgrade them in their member project", ws_skipped))
+                dim(format!("{} workspace dep(s) outdated, upgrade them in their member project", ws_skipped))
             );
         } else {
             println!("{}", dim("all dependencies are up to date"));
@@ -103,7 +135,7 @@ fn interactive(root: &Path, cfg: &Config, rows: &[Row]) -> Result<i32> {
         );
     }
 
-    let targets = match sel::select(&upgradable)? {
+    let targets = match sel::select(&upgradable, heading)? {
         Some(t) => t,
         None => return Ok(0), // q / esc / ctrl+c / enter with everything kept
     };
@@ -133,18 +165,13 @@ fn interactive(root: &Path, cfg: &Config, rows: &[Row]) -> Result<i32> {
 
     // major picks: record `^<latest-of-major>` in the manifest the same way
     // `zap add` records specs (respecting save-exact), then re-resolve via
-    // the shared install entry — no resolution logic forked here
+    // the shared install entry, no resolution logic forked here
     if !major.is_empty() {
-        let mut v = crate::util::read_json(&root.join("package.json"))?;
-        let obj = v.as_object_mut().ok_or_else(|| anyhow::anyhow!("package.json root must be an object"))?;
-        for r in &major {
-            let key = if r.source == "dev" { "devDependencies" } else { "dependencies" };
-            let deps = obj.entry(key.to_string()).or_insert_with(|| serde_json::json!({}));
-            let dmap = deps.as_object_mut().ok_or_else(|| anyhow::anyhow!("{} must be an object", key))?;
-            let range = if cfg.save_exact { r.latest_major.clone() } else { format!("^{}", r.latest_major) };
-            dmap.insert(r.name.clone(), serde_json::json!(range));
-        }
-        std::fs::write(root.join("package.json"), format!("{}\n", serde_json::to_string_pretty(&v)?))?;
+        let picks: Vec<(String, String, bool)> = major
+            .iter()
+            .map(|r| (r.name.clone(), r.latest_major.clone(), r.source == "dev"))
+            .collect();
+        record_ranges(root, cfg, &picks)?;
     }
 
     // add --dev is a global flag, so split by manifest section and run one
@@ -255,8 +282,29 @@ fn latest_major_from(current: &str, pack: &crate::model::Packument) -> String {
         .unwrap_or_default()
 }
 
+/// record `^<version>` (or the exact version under save-exact) for every
+/// (name, version, dev) pick in its manifest section, the way `zap add`
+/// records specs; one read-modify-write for the whole batch. shared by the
+/// major-bump path here and the version picker in upgrade.rs
+pub(crate) fn record_ranges(root: &Path, cfg: &Config, picks: &[(String, String, bool)]) -> Result<()> {
+    if picks.is_empty() {
+        return Ok(());
+    }
+    let mut v = crate::util::read_json(&root.join("package.json"))?;
+    let obj = v.as_object_mut().ok_or_else(|| anyhow::anyhow!("package.json root must be an object"))?;
+    for (name, version, dev) in picks {
+        let key = if *dev { "devDependencies" } else { "dependencies" };
+        let deps = obj.entry(key.to_string()).or_insert_with(|| serde_json::json!({}));
+        let dmap = deps.as_object_mut().ok_or_else(|| anyhow::anyhow!("{} must be an object", key))?;
+        let range = if cfg.save_exact { version.clone() } else { format!("^{}", version) };
+        dmap.insert(name.clone(), serde_json::json!(range));
+    }
+    std::fs::write(root.join("package.json"), format!("{}\n", serde_json::to_string_pretty(&v)?))?;
+    Ok(())
+}
+
 /// the dep rows before the registry pass: (source, name, current version,
-/// requested range) — root manifest first, then workspace members
+/// requested range), root manifest first, then workspace members
 fn scan(root: &Path, lock: &crate::model::Lockfile) -> Result<Vec<(String, String, String, String)>> {
     let mut rows: Vec<(String, String, String, String)> = Vec::new();
     let manifest = crate::util::read_json(&root.join("package.json"))?;

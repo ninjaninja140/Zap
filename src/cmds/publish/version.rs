@@ -9,6 +9,12 @@ use crate::util::green;
 pub const NAME: &str = "version";
 pub const ALIASES: &[&str] = &["bump"];
 pub const USAGE: &str = "bump package.json version (major|minor|patch|<x.y.z>; --no-git-tag-version, -m <msg>)";
+pub const ABOUT: &str = "npm-version-style bump of package.json: major|minor|patch or an
+explicit x.y.z. writes a changelog entry and a git commit + tag by default;
+--no-git-tag-version skips the git side, -m <msg> overrides the message.
+alias: bump.";
+pub const EXAMPLE: &str = "  $ zap version patch
+  1.2.3 -> 1.2.4, changelog entry, commit and tag";
 
 /// pure version math: major/minor/patch bumps strip prerelease+build metadata;
 /// anything else is parsed as an exact version (prerelease/build allowed there)

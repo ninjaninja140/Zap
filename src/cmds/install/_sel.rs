@@ -214,12 +214,22 @@ fn window(cursor: usize, n: usize, view: usize) -> usize {
 /// built from fixed-width columns so all rows share one exact width and
 /// nothing inside the list ever needs ESC[2K
 // shortcut: only a single version string wider than the terminal still wraps
-// the frame (the name always gets the remaining budget) — not a real scenario;
+// the frame (the name always gets the remaining budget), not a real scenario;
 // a resize mid-session keeps the old size until a key arrives
-fn frame(rows: &[Row], s: &Sel, w: usize, h: usize) -> String {
+fn frame(rows: &[Row], s: &Sel, w: usize, h: usize, heading: &str) -> String {
     let mut out = String::from("\x1b[H\x1b[2J");
-    out.push_str(&format!("\x1b[1;1H{}", electric_bold("pick upgrade targets")));
-    let view = h.saturating_sub(5).max(1); // title + blank + header + gap + footer
+    // the pre-styled heading block goes in verbatim as the topmost lines, so
+    // the command context stays visible during the interaction; everything
+    // below shifts down by its line count + one separator blank
+    let head_n = heading.lines().count();
+    for (i, line) in heading.lines().enumerate() {
+        out.push_str(&format!("\x1b[{};1H{}", i + 1, line));
+    }
+    let title_row = head_n + 2;
+    let header_row = head_n + 4;
+    let list_start = head_n + 5;
+    let view = h.saturating_sub(head_n + 6).max(1); // heading + blank + title + blank + header + gap + footer
+    out.push_str(&format!("\x1b[{};1H{}", title_row, electric_bold("pick upgrade targets")));
     let off = window(s.cursor, rows.len(), view);
     // column widths: the header labels set the floor so header and data share
     // one skeleton, then the name gets what's left of the terminal
@@ -235,7 +245,8 @@ fn frame(rows: &[Row], s: &Sel, w: usize, h: usize) -> String {
     // skeleton as the rows (the name cell carries the gutter, gaps only
     // between the version columns)
     out.push_str(&format!(
-        "\x1b[3;1H{}",
+        "\x1b[{};1H{}",
+        header_row,
         dim(format!(
             "  {:<nw$}{:<cw$}{}{:<mw$}{}{:<lw$}",
             "package",
@@ -282,7 +293,7 @@ fn frame(rows: &[Row], s: &Sel, w: usize, h: usize) -> String {
             gap,
             cell(&r.latest, w_lat, latest_style),
         );
-        out.push_str(&format!("\x1b[{};1H{}", 4 + shown, line));
+        out.push_str(&format!("\x1b[{};1H{}", list_start + shown, line));
         shown += 1;
     }
     let (majors, latests) = s.counts();
@@ -298,7 +309,7 @@ fn frame(rows: &[Row], s: &Sel, w: usize, h: usize) -> String {
         shown_foot.chars().skip(split).collect::<String>(),
     );
     let foot = format!("{}{}", dim(&h), bold(&c));
-    out.push_str(&format!("\x1b[{};1H{}", 4 + shown + 1, foot));
+    out.push_str(&format!("\x1b[{};1H{}", list_start + shown + 1, foot));
     out
 }
 
@@ -321,8 +332,8 @@ fn cell(text: &str, width: usize, style: Cell) -> String {
     }
 }
 
-fn repaint(rows: &[Row], s: &Sel, w: usize, h: usize) {
-    let mut out = frame(rows, s, w, h);
+fn repaint(rows: &[Row], s: &Sel, w: usize, h: usize, heading: &str) {
+    let mut out = frame(rows, s, w, h, heading);
     out.push_str("\x1b[H"); // park the cursor so nothing scrolls
     let mut stdout = std::io::stdout();
     let _ = stdout.write_all(out.as_bytes());
@@ -331,7 +342,7 @@ fn repaint(rows: &[Row], s: &Sel, w: usize, h: usize) {
 
 /// run the selector; Ok(None) = cancelled (q, esc, ctrl+c, or enter with
 /// everything kept), Ok(Some(targets)) = per-row target choice into `rows`
-pub fn select(rows: &[Row]) -> Result<Option<Vec<Target>>> {
+pub fn select(rows: &[Row], heading: &str) -> Result<Option<Vec<Target>>> {
     let (mut w, mut h) = term_size();
     let guard = TerminalGuard::new();
     if !guard.raw_active() {
@@ -344,7 +355,7 @@ pub fn select(rows: &[Row]) -> Result<Option<Vec<Target>>> {
 
     let mut s = Sel::new(rows.len());
     let mut out = String::from("\x1b[?1049h\x1b[?25l"); // alt screen, hide cursor
-    out.push_str(&frame(rows, &s, w, h));
+    out.push_str(&frame(rows, &s, w, h, heading));
     let mut stdout = std::io::stdout();
     stdout.write_all(out.as_bytes())?;
     stdout.flush()?;
@@ -386,23 +397,161 @@ pub fn select(rows: &[Row]) -> Result<Option<Vec<Target>>> {
             Err(RecvTimeoutError::Timeout) => {}
         }
         // resize poll between repaints
-        // shortcut: detection is a 150ms poll, not SIGWINCH — the std-only
+        // shortcut: detection is a 150ms poll, not SIGWINCH, the std-only
         // cross-platform answer; SIGWINCH would be the unix-native way
         tick += 1;
-        if size_poll_tick(tick) {
-            let (nw, nh) = term_size();
-            if needs_relayout((w, h), (nw, nh)) {
-                (w, h) = (nw, nh);
-                dirty = true; // window() and row widths recompute inside frame()
-            }
+        if poll_resize(&mut w, &mut h, tick) {
+            dirty = true; // window() and row widths recompute inside frame()
         }
         if dirty {
-            repaint(rows, &s, w, h);
+            repaint(rows, &s, w, h, heading);
             dirty = false;
         }
     }
     drop(guard); // restore raw mode + leave the alt screen before more output
     Ok(apply(&s, cancelled))
+}
+
+/// the per-tick resize poll shared by both loops: true when the terminal
+/// changed size (callers recompute geometry and repaint)
+fn poll_resize(w: &mut usize, h: &mut usize, tick: u32) -> bool {
+    if !size_poll_tick(tick) {
+        return false;
+    }
+    let (nw, nh) = term_size();
+    if needs_relayout((*w, *h), (nw, nh)) {
+        *w = nw;
+        *h = nh;
+        return true;
+    }
+    false
+}
+
+/// cheap stdin probe for flows that would fetch network data before their
+/// first picker opens: bail on piped stdin before wasting the fetches. the
+/// guard drops immediately, raw mode is restored, nothing is read
+pub fn console_available() -> bool {
+    TerminalGuard::new().raw_active()
+}
+
+/// all registry versions of one package, newest first; unparseable keys are
+/// dropped (packument keys are version strings in practice) (pure, tested)
+pub fn sort_versions(keys: Vec<String>) -> Vec<String> {
+    let mut vs: Vec<(semver::Version, String)> =
+        keys.into_iter().filter_map(|k| semver::Version::parse(&k).ok().map(|v| (v, k))).collect();
+    vs.sort_by(|a, b| b.0.cmp(&a.0));
+    vs.into_iter().map(|(_, k)| k).collect()
+}
+
+/// where the picker cursor opens: the newest stable release, 0 when the list
+/// is all prereleases (pure, tested)
+pub fn cursor_start(versions: &[String]) -> usize {
+    versions
+        .iter()
+        .position(|v| semver::Version::parse(v).map(|p| p.pre.is_empty()).unwrap_or(false))
+        .unwrap_or(0)
+}
+
+/// clamp a cursor step into 0..len (free fn so the picker state stays dumb)
+fn clamp_move(cursor: usize, d: isize, len: usize) -> usize {
+    if len == 0 {
+        return 0;
+    }
+    (cursor as isize + d).clamp(0, len as isize - 1) as usize
+}
+
+/// single-select version picker behind `zap upgrade -i <pkg>`: newest-first
+/// list, the cursor opens on the newest stable, prereleases render dim (still
+/// selectable); enter picks, q/esc/ctrl+c cancels
+pub fn pick_version(name: &str, versions: &[String], heading: &str) -> Result<Option<String>> {
+    let (mut w, mut h) = term_size();
+    let guard = TerminalGuard::new();
+    if !guard.raw_active() {
+        // piped stdin: bail before anything is painted; the idle guard
+        // restores nothing and writes no escapes
+        anyhow::bail!("interactive mode needs a terminal");
+    }
+    let (tx, rx) = mpsc::channel::<Key>();
+    term::spawn_key_thread(tx);
+
+    let mut cursor = cursor_start(versions);
+    let mut out = String::from("\x1b[?1049h\x1b[?25l"); // alt screen, hide cursor
+    out.push_str(&vframe(name, versions, cursor, w, h, heading));
+    let mut stdout = std::io::stdout();
+    stdout.write_all(out.as_bytes())?;
+    stdout.flush()?;
+
+    let mut cancelled = false;
+    let mut dirty = false;
+    let mut tick = 0u32;
+    loop {
+        match rx.recv_timeout(TICK) {
+            Ok(Key::Up) => {
+                cursor = clamp_move(cursor, -1, versions.len());
+                dirty = true;
+            }
+            Ok(Key::Down) => {
+                cursor = clamp_move(cursor, 1, versions.len());
+                dirty = true;
+            }
+            Ok(Key::Enter) => break,
+            Ok(Key::Cancel) | Ok(Key::CtrlC) | Err(RecvTimeoutError::Disconnected) => {
+                cancelled = true;
+                break;
+            }
+            _ => {} // left/right/a/m belong to the target selector; no-ops here
+        }
+        tick += 1;
+        if poll_resize(&mut w, &mut h, tick) {
+            dirty = true;
+        }
+        if dirty {
+            vrepaint(name, versions, cursor, w, h, heading);
+            dirty = false;
+        }
+    }
+    drop(guard); // restore raw mode + leave the alt screen before more output
+    Ok(if cancelled { None } else { versions.get(cursor).cloned() })
+}
+
+/// compose the version picker screen: full clear + redraw per keypress,
+/// fixed one-column rows so no ESC[2K is ever needed (same discipline as
+/// frame()); the pre-styled heading block rides on top; prereleases stay dim
+/// even under the cursor so they read as a different tier
+fn vframe(name: &str, versions: &[String], cursor: usize, w: usize, h: usize, heading: &str) -> String {
+    let mut out = String::from("\x1b[H\x1b[2J");
+    let head_n = heading.lines().count();
+    for (i, line) in heading.lines().enumerate() {
+        out.push_str(&format!("\x1b[{};1H{}", i + 1, line));
+    }
+    out.push_str(&format!("\x1b[{};1H{}", head_n + 2, electric_bold(format!("pick a version for `{}`", name))));
+    let view = h.saturating_sub(head_n + 5).max(1); // heading + blank + title + blank + gap + footer
+    let list_start = head_n + 4;
+    let off = window(cursor, versions.len(), view);
+    let w_ver = versions.iter().map(|v| v.chars().count()).max().unwrap_or(0).min(w.saturating_sub(8).max(4));
+    let mut shown = 0usize;
+    for (i, v) in versions.iter().enumerate().skip(off).take(view) {
+        let cursor_row = i == cursor;
+        let pre = !semver::Version::parse(v).map(|p| p.pre.is_empty()).unwrap_or(false);
+        let marker = if cursor_row { electric_bold("❯") } else { " ".to_string() };
+        let text = format!("{:<vw$}", v.chars().take(w_ver).collect::<String>(), vw = w_ver);
+        let body = if cursor_row && !pre { text } else { dim(&text) };
+        out.push_str(&format!("\x1b[{};1H{} {}", list_start + shown, marker, body));
+        shown += 1;
+    }
+    let foot = format!("up/down: move · enter: pick · q: cancel · {}/{}", cursor + 1, versions.len());
+    // plain-first truncation so a tiny terminal can't wrap the repaint
+    let shown_foot: String = foot.chars().take(w).collect();
+    out.push_str(&format!("\x1b[{};1H{}", list_start + shown + 1, dim(&shown_foot)));
+    out
+}
+
+fn vrepaint(name: &str, versions: &[String], cursor: usize, w: usize, h: usize, heading: &str) {
+    let mut out = vframe(name, versions, cursor, w, h, heading);
+    out.push_str("\x1b[H"); // park the cursor so nothing scrolls
+    let mut stdout = std::io::stdout();
+    let _ = stdout.write_all(out.as_bytes());
+    let _ = stdout.flush();
 }
 
 /// terminal size: visible console window (windows) / `stty size` (unix), 80x24
@@ -703,6 +852,10 @@ mod term {
 mod tests {
     use super::*;
 
+    /// a stand-in pre-styled heading block (the real one comes from
+    /// crate::heading_block; width math only cares about the line count)
+    const HEAD: &str = "h1\nh2\nh3\nh4";
+
     fn row(name: &str, cur: &str, major: &str, latest: &str) -> Row {
         Row {
             source: String::new(),
@@ -820,9 +973,11 @@ mod tests {
         s.move_by(1);
         s.cycle(1, true); // row 1 target = major
         s.move_by(1); // cursor on row 2, still on the default (current)
-        let f = frame(&rows, &s, 80, 24);
+        let f = frame(&rows, &s, 80, 24, HEAD);
         assert!(!f.contains("\x1b[2K"), "no line erases: rows overwrite by exact width");
         assert!(f.contains("❯"), "cursor marker present");
+        // the heading block rides on top, pre-styled and untouched
+        assert!(f.contains("h1") && f.contains("h4"), "heading lines at the top");
         // row 0's latest cell is the highlighted (inverse) one; the cell pad
         // follows the label floor ("latest".len() = 6)
         let pick_latest = format!("\x1b[7m{:<w$}", "2.1.3", w = "latest".len());
@@ -833,19 +988,23 @@ mod tests {
         // highlighted one ("current".len() = 7 pad), so "stay as-is" is visible
         let pick_current = format!("\x1b[7m{:<w$}", "1.3.0", w = "current".len());
         assert!(f.contains(&pick_current), "default rows highlight the current cell");
-        // row 2 has latest_major == current: its major cell stays dim — no-op
+        // row 2 has latest_major == current: its major cell stays dim, no-op
         let noop = dim(&format!("{:<w$}", "1.3.0", w = "1.3.0".len()));
         assert!(f.contains(&noop), "no-op major cell renders dim");
         assert!(f.contains("←→: target · up/down: move · enter: apply · q: cancel"));
         assert!(f.contains(&bold("1 major · 1 latest")), "footer counts are the payload");
         // header and rows share one skeleton: identical column starts and
-        // identical line width; the footer is its own (count-capped) width
+        // identical line width; heading lines + footer are their own widths
         let ws = line_widths(&f);
-        assert_eq!(ws[0], "pick upgrade targets".len(), "title measured plain");
-        let body = &ws[1..ws.len() - 1]; // header + list rows
-        assert!(body.iter().all(|n| *n == body[0]), "header + rows share one exact width");
-        assert_eq!(body[0], 2 + 10 + 7 + 2 + 5 + 2 + 6, "label-floored skeleton");
+        assert_eq!(&ws[..4], &[2, 2, 2, 2], "the four heading lines, verbatim");
+        let body = &ws[4..ws.len() - 1]; // title + header + list rows
+        assert_eq!(body[0], "pick upgrade targets".len(), "title below the heading");
+        assert_eq!(body[1], 2 + 10 + 7 + 2 + 5 + 2 + 6, "label-floored skeleton");
+        assert!(body[2..].iter().all(|n| *n == body[1]), "rows share the header's skeleton");
         assert!(*ws.last().unwrap() <= 80, "footer fits the terminal");
+        // height math: positioned lines only (the separator blank is left
+        // blank by the clear): heading(4) + title + header + 3 rows + footer
+        assert_eq!(ws.len(), 4 + 1 + 1 + 3 + 1, "heading + title + header + rows + footer");
     }
 
     /// visible width of every positioned line: strict `row;colH` starts, the
@@ -888,13 +1047,13 @@ mod tests {
         let long_name = "n".repeat(60);
         let rows = vec![row(&long_name, "2.0.0", "2.1.3", "14.0.0-beta.12")];
         let s = Sel::new(1);
-        let f = frame(&rows, &s, 80, 24);
+        let f = frame(&rows, &s, 80, 24, HEAD);
         assert!(!f.contains("\x1b[2K"));
         for wd in line_widths(&f) {
             assert!(wd <= 80, "line of {} visible chars overflows 80 cols", wd);
         }
         // narrower terminal: the footer takes the hit, lines stay in bounds
-        let f = frame(&rows, &s, 70, 24);
+        let f = frame(&rows, &s, 70, 24, HEAD);
         for wd in line_widths(&f) {
             assert!(wd <= 70, "line of {} visible chars overflows 70 cols", wd);
         }
@@ -942,6 +1101,60 @@ mod tests {
     }
 
     #[test]
+    fn sort_versions_puts_newest_first() {
+        let vs = sort_versions(vec![
+            "4.1.2".into(),
+            "6.0.1".into(),
+            "4.2.0-beta.1".into(),
+            "2.1.3".into(),
+            "10.0.0".into(),
+        ]);
+        assert_eq!(vs, vec!["10.0.0", "6.0.1", "4.2.0-beta.1", "4.1.2", "2.1.3"]);
+        // unparseable keys are dropped rather than crashing the sort
+        assert_eq!(sort_versions(vec!["next".into(), "1.0.0".into()]), vec!["1.0.0"]);
+    }
+
+    #[test]
+    fn cursor_opens_on_the_newest_stable() {
+        // newest entry is a prerelease: the cursor skips to the first stable
+        let vs = sort_versions(vec!["4.1.2".into(), "6.0.1-alpha".into(), "5.0.0".into()]);
+        assert_eq!(vs, vec!["6.0.1-alpha", "5.0.0", "4.1.2"]);
+        assert_eq!(cursor_start(&vs), 1);
+        // all-prerelease list: nothing to anchor on, index 0
+        let pre_only = sort_versions(vec!["2.0.0-rc.1".into(), "1.0.0-beta".into()]);
+        assert_eq!(cursor_start(&pre_only), 0);
+    }
+
+    #[test]
+    fn version_cursor_moves_and_clamps() {
+        assert_eq!(clamp_move(0, -1, 3), 0);
+        assert_eq!(clamp_move(2, 1, 3), 2);
+        assert_eq!(clamp_move(0, 99, 3), 2);
+        assert_eq!(clamp_move(2, -99, 3), 0);
+        // empty list: no panic, no move
+        assert_eq!(clamp_move(0, 1, 0), 0);
+    }
+
+    #[test]
+    fn vpicker_rows_mark_prereleases_and_share_width() {
+        let versions = vec!["6.0.1".to_string(), "5.0.0-rc.1".to_string()];
+        let f = vframe("chalk", &versions, 1, 80, 24, HEAD); // cursor on the prerelease
+        assert!(!f.contains("\x1b[2K"), "no line erases: rows overwrite by exact width");
+        assert!(f.contains("❯"), "cursor marker present");
+        // the heading block rides on top
+        assert!(f.contains("h1") && f.contains("h4"), "heading lines at the top");
+        // the prerelease stays dim even under the cursor; the stable cursor
+        // row renders plain
+        assert!(f.contains(&dim(&format!("{:<w$}", "5.0.0-rc.1", w = 6))));
+        // uniform row width: fixed one-column rows (the title has its own)
+        let ws = line_widths(&f);
+        let rows = &ws[5..ws.len() - 1];
+        assert!(rows.iter().all(|n| *n == rows[0]), "uniform version rows");
+        assert!(f.contains("up/down: move · enter: pick · q: cancel"));
+        assert!(f.contains("2/2"), "picker position in the footer");
+    }
+
+    #[test]
     fn window_keeps_the_cursor_visible() {
         assert_eq!(window(0, 25, 10), 0);
         assert_eq!(window(9, 25, 10), 0);
@@ -958,10 +1171,11 @@ mod tests {
             .collect();
         let mut s = Sel::new(30);
         s.move_by(29);
-        let f = frame(&rows, &s, 80, 24);
-        // only the viewport's rows are drawn (view = 24 - 5 = 19)
+        let f = frame(&rows, &s, 80, 24, HEAD);
+        // only the viewport's rows are drawn (view = 24 - 10 = 14 with the
+        // heading block counted in)
         assert!(f.contains("pkg29") && !f.contains("pkg0 "));
-        assert!(f.contains("pkg11"), "the window opens so the cursor is visible");
+        assert!(f.contains("pkg16"), "the window opens so the cursor is visible");
     }
 
     #[test]
@@ -988,14 +1202,14 @@ mod tests {
         for _ in 0..8 {
             s.move_by(1); // cursor on row 8
         }
-        // wide console: everything fits (view = 30 - 5 = 25)
-        assert_eq!(window(s.cursor, rows.len(), 25), 0);
-        let wide = frame(&rows, &s, 120, 30);
+        // wide console: everything fits (view = 30 - 10 = 20 with the heading)
+        assert_eq!(window(s.cursor, rows.len(), 20), 0);
+        let wide = frame(&rows, &s, 120, 30, HEAD);
         assert!(wide.contains("pkg08") && wide.contains("pkg00"));
-        // shrunk console: view = 10 - 5 = 5 rows, the window slides so the
+        // shrunk console: view = 12 - 10 = 2 rows, the window slides so the
         // cursor row stays on screen
-        assert_eq!(window(s.cursor, rows.len(), 5), 4);
-        let small = frame(&rows, &s, 80, 10);
+        assert_eq!(window(s.cursor, rows.len(), 2), 7);
+        let small = frame(&rows, &s, 80, 12, HEAD);
         assert!(small.contains("pkg08"), "cursor row stays visible after the shrink");
         assert!(!small.contains("pkg00"), "early rows scrolled out of the viewport");
         // footer still lands inside the tiny window

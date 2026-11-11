@@ -10,6 +10,11 @@ use crate::util::{dim, green};
 pub const NAME: &str = "skills";
 pub const ALIASES: &[&str] = &[];
 pub const USAGE: &str = "inject zap usage into CLAUDE.md / AGENTS.md (--remove to strip)";
+pub const ABOUT: &str = "injects (or updates) a zap usage cheat-sheet into CLAUDE.md or
+AGENTS.md so AI coding assistants understand the zap mental model;
+--remove strips the block again.";
+pub const EXAMPLE: &str = "  $ zap skills
+  write the zap usage block into AGENTS.md / CLAUDE.md";
 
 const SKILLS_BLOCK: &str = r#"## zap package manager
 

@@ -3,6 +3,10 @@
 pub const NAME: &str = "audit";
 pub const ALIASES: &[&str] = &[];
 pub const USAGE: &str = "check installed packages for known advisories";
+pub const ABOUT: &str = "checks every installed package against known security advisories and
+reports affected versions with severity, so you can act before shipping.";
+pub const EXAMPLE: &str = "  $ zap audit
+  scan the installed tree for known advisories";
 
 pub fn run(args: &[String]) -> anyhow::Result<i32> {
     crate::devtools::audit_cmd(args)

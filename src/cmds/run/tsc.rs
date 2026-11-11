@@ -9,6 +9,11 @@ use crate::workspace::install_root_for;
 pub const NAME: &str = "tsc";
 pub const ALIASES: &[&str] = &[];
 pub const USAGE: &str = "run the zap-managed typescript compiler";
+pub const ABOUT: &str = "runs the zap-managed typescript compiler: zap installs and pins the
+version (default via `typescript:` in .zaprc) and wires up @types/* so plain
+`zap tsc` just works. args pass straight through to tsc.";
+pub const EXAMPLE: &str = "  $ zap tsc --noEmit
+  type-check the project with the pinned typescript";
 
 pub fn run(args: &[String]) -> Result<i32> {
     let ctx = crate::util::find_root()?;
