@@ -341,6 +341,9 @@ fn run_stages(pane: &Pane, stages: Vec<(String, String)>, cwd: &Path, env_root: 
         if i > 0 {
             push(pane, &format!("── {} ──", label));
         }
+        // npm-style: every stage announces its own command line, these scroll
+        // with the tail like normal output
+        push(pane, &format!("> {}", line));
         {
             let mut p = pane.lock().unwrap();
             p.stage = label.clone();
@@ -979,6 +982,41 @@ fn term_size() -> (usize, usize) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_stages_pushes_command_lines_into_the_tail() {
+        // a real echo child, offline: every stage's `> <line>` lands in the
+        // tail after its separator; the child's output follows
+        let pane: Pane = Arc::new(Mutex::new(PaneInner {
+            lines: VecDeque::new(),
+            seq: 0,
+            stage: String::new(),
+            done: false,
+            code: 0,
+        }));
+        let ctrl = Ctrl { pids: Mutex::new(Vec::new()), aborted: AtomicBool::new(false) };
+        let cwd = std::env::temp_dir();
+        let stages = vec![
+            ("prebuild".to_string(), "echo aaa".to_string()),
+            ("build".to_string(), "echo bbb".to_string()),
+        ];
+        run_stages(&pane, stages, &cwd, &cwd, Linker::NodeModules, &ctrl);
+        let p = pane.lock().unwrap();
+        assert!(p.done && p.code == 0);
+        let tail: Vec<String> = p.lines.iter().cloned().collect();
+        // stage 1 (i=0): no separator, just the command line then the output
+        assert_eq!(tail[0], "> echo aaa");
+        assert!(tail.iter().any(|l| l == "aaa"));
+        // stage 2: the separator precedes its command line + output
+        assert!(tail.iter().any(|l| l == "── build ──"));
+        assert!(tail.iter().any(|l| l == "> echo bbb"));
+        assert!(tail.iter().any(|l| l == "bbb"));
+        // ordering: the command line lands between the separator and the output
+        let sep = tail.iter().position(|l| l == "── build ──").unwrap();
+        let cmd = tail.iter().position(|l| l == "> echo bbb").unwrap();
+        let out = tail.iter().position(|l| l == "bbb").unwrap();
+        assert!(sep < cmd && cmd < out);
+    }
 
     #[test]
     fn grid_sizes() {
