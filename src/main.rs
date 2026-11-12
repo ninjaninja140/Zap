@@ -17,9 +17,9 @@ mod workspace;
 use anyhow::Result;
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
-const LOGO: &str = include_str!("../zap.emblem.txt");
-const HEADING: &str = include_str!("../zap.heading.txt");
-const UPDATE: &str = include_str!("../zap.update.txt");
+const LOGO: &str = include_str!("../headers/zap.emblem.txt");
+const HEADING: &str = include_str!("../headers/zap.heading.txt");
+const UPDATE: &str = include_str!("../headers/zap.update.txt");
 
 fn ts_badge() -> String {
     "\x1b[48;2;49;120;198m\x1b[97m TS \x1b[0m".to_string()
@@ -79,7 +79,16 @@ fn print_heading(args: &[String]) {
 fn update_banner_cmd(cmd: &str) -> bool {
     matches!(
         cmd,
-        "install" | "add" | "remove" | "view" | "info" | "outdated" | "inspect" | "publish" | "login" | "whoami"
+        "install"
+            | "add"
+            | "remove"
+            | "view"
+            | "info"
+            | "outdated"
+            | "inspect"
+            | "publish"
+            | "login"
+            | "whoami"
     )
 }
 
@@ -150,7 +159,9 @@ fn banner() -> String {
             }
             let zap_part = format!("zap: v{}", VERSION);
             let node_part = format!("Node {}", node);
-            let pad = (strip_len.saturating_sub(zap_part.chars().count() + node_part.chars().count())).max(2);
+            let pad = (strip_len
+                .saturating_sub(zap_part.chars().count() + node_part.chars().count()))
+            .max(2);
             header.push_str(&format!("{}{}{}", zap_part, " ".repeat(pad), node_part));
             lines[i - 1] = header;
         }
@@ -186,7 +197,10 @@ fn run(args: &[String]) -> Result<i32> {
     // heading for all commands (skip bare zap and help, the help body is its own
     // front matter). --json requests machine-readable output, so the human
     // heading is suppressed there too, stdout carries only the document
-    if !cmd.is_empty() && !matches!(cmd, "help" | "-h" | "--help") && !rest.iter().any(|a| a == "--json") {
+    if !cmd.is_empty()
+        && !matches!(cmd, "help" | "-h" | "--help")
+        && !rest.iter().any(|a| a == "--json")
+    {
         print_heading(args);
         println!();
         // the update banner rides the same gate as the heading (machine mode
@@ -232,10 +246,17 @@ fn run(args: &[String]) -> Result<i32> {
 /// rendering test can share it
 fn command_help(c: &cmds::Command) -> String {
     let mut out = String::new();
-    out.push_str(&format!("{}, {}\n", util::bold(c.name.to_uppercase()), util::dim(c.usage)));
+    out.push_str(&format!(
+        "{}, {}\n",
+        util::bold(c.name.to_uppercase()),
+        util::dim(c.usage)
+    ));
     out.push_str(&format!("{}\n", c.about));
     if !c.aliases.is_empty() {
-        out.push_str(&format!("{}\n", util::dim(format!("aliases: {}", c.aliases.join(", ")))));
+        out.push_str(&format!(
+            "{}\n",
+            util::dim(format!("aliases: {}", c.aliases.join(", ")))
+        ));
     }
     out.push_str(&format!("{}\n", util::dim("example:")));
     for line in c.example.lines() {
@@ -253,7 +274,10 @@ fn command_help(c: &cmds::Command) -> String {
 /// command shown in the full-command line
 fn how_command(rest: &[String]) -> Result<i32> {
     // `zap how --help`/`-h` count as bare how, no recursion
-    let target = rest.iter().map(|s| s.as_str()).find(|a| *a != "--help" && *a != "-h");
+    let target = rest
+        .iter()
+        .map(|s| s.as_str())
+        .find(|a| *a != "--help" && *a != "-h");
     match target {
         None => {
             eprintln!("{}", util::dim("usage: zap how <command>"));
@@ -277,7 +301,10 @@ fn how_view(c: &cmds::Command, typed: &str) -> String {
 
 /// the unknown-target error for `zap how`
 fn how_unknown(target: &str) -> String {
-    format!("unknown command '{}' for zap how, try zap help for categories", target)
+    format!(
+        "unknown command '{}' for zap how, try zap help for categories",
+        target
+    )
 }
 
 #[cfg(test)]
@@ -288,17 +315,29 @@ mod tests {
     fn heading_block_holds_all_four_lines() {
         let s = heading_block("upgrade", "upgrade --interactive chalk");
         assert_eq!(s.lines().count(), 4, "emblem, strip, badge, full command");
-        assert!(s.contains("UPGRADE"), "the badge collapses to the canonical name");
-        assert!(s.contains("> upgrade --interactive chalk"), "full command as typed");
+        assert!(
+            s.contains("UPGRADE"),
+            "the badge collapses to the canonical name"
+        );
+        assert!(
+            s.contains("> upgrade --interactive chalk"),
+            "full command as typed"
+        );
         assert!(s.contains("no args: re-resolve"), "usage from the registry");
     }
 
     #[test]
     fn update_banner_gate_covers_the_network_commands() {
-        for c in ["install", "add", "remove", "view", "info", "outdated", "inspect", "publish", "login", "whoami"] {
+        for c in [
+            "install", "add", "remove", "view", "info", "outdated", "inspect", "publish", "login",
+            "whoami",
+        ] {
             assert!(update_banner_cmd(c), "{} should banner", c);
         }
-        for c in ["run", "exec", "x", "dlx", "help", "config", "doctor", "ci", "migrate", "pack", "logout", ""] {
+        for c in [
+            "run", "exec", "x", "dlx", "help", "config", "doctor", "ci", "migrate", "pack",
+            "logout", "",
+        ] {
             assert!(!update_banner_cmd(c), "{} should stay quiet", c);
         }
     }
@@ -307,7 +346,10 @@ mod tests {
     fn update_newer_is_semver_strict() {
         assert!(update_newer("0.7.0", "0.1.0"));
         assert!(!update_newer("0.1.0", "0.7.0"));
-        assert!(!update_newer("0.1.0", "0.1.0"), "equal versions never banner");
+        assert!(
+            !update_newer("0.1.0", "0.1.0"),
+            "equal versions never banner"
+        );
         // prereleases don't beat the stable of the same version
         assert!(!update_newer("0.1.0-beta.1", "0.1.0"));
         // garbage either side → no banner
@@ -318,7 +360,11 @@ mod tests {
     #[test]
     fn update_banner_replaces_every_token() {
         let b = update_banner("0.7.0", "0.1.0");
-        assert!(!b.contains("NEW") && !b.contains("CURRENT") && !b.contains("UPDATE_HINT"), "all tokens replaced: {}", b);
+        assert!(
+            !b.contains("NEW") && !b.contains("CURRENT") && !b.contains("UPDATE_HINT"),
+            "all tokens replaced: {}",
+            b
+        );
         assert!(b.contains("zap v0.7.0"), "new version shown: {}", b);
         assert!(b.contains("v0.1.0"), "current version shown: {}", b);
         assert!(b.lines().count() == 4, "the art's 4 lines survive: {}", b);
@@ -330,7 +376,8 @@ mod tests {
     fn update_banner_for_silent_offline_commands() {
         use std::path::PathBuf;
         fn tempdir(tag: &str) -> PathBuf {
-            let dir = std::env::temp_dir().join(format!("zap-banner-{}-{}", tag, std::process::id()));
+            let dir =
+                std::env::temp_dir().join(format!("zap-banner-{}-{}", tag, std::process::id()));
             let _ = std::fs::remove_dir_all(&dir);
             std::fs::create_dir_all(&dir).unwrap();
             dir
@@ -348,14 +395,18 @@ mod tests {
     }
 
     #[test]
-    fn help_view_renders_every_section() {        let c = cmds::lookup("install").expect("install in registry");
+    fn help_view_renders_every_section() {
+        let c = cmds::lookup("install").expect("install in registry");
         let s = command_help(c);
         assert!(s.contains("INSTALL"), "bold uppercased name");
         assert!(s.contains("aliases: i"), "aliases listed when present");
         assert!(s.contains("example:"), "example label");
         // the `$` prompt renders electric, so the plain sequence is split
         assert!(s.contains(&util::electric("$")), "electric prompt");
-        assert!(s.contains("zap install --frozen-lockfile"), "the example invocation");
+        assert!(
+            s.contains("zap install --frozen-lockfile"),
+            "the example invocation"
+        );
         // alias-free commands hide the aliases line entirely
         let c = cmds::lookup("outdated").expect("outdated in registry");
         let s = command_help(c);
@@ -371,7 +422,11 @@ mod tests {
         assert!(s.contains("everything"), "usage block");
         for (group, desc) in cmds::GROUP_INFO {
             let count = cmds::COMMANDS.iter().filter(|c| c.group == *group).count();
-            assert!(s.contains(&format!("({} commands)", count)), "{}: live count", group);
+            assert!(
+                s.contains(&format!("({} commands)", count)),
+                "{}: live count",
+                group
+            );
             assert!(s.contains(desc), "{}: description", group);
         }
         // zero command rows: no group headers, no alias pipes, no prose tail
@@ -384,8 +439,14 @@ mod tests {
     fn category_help_shows_only_that_group() {
         let s = category_view("run");
         assert!(s.contains("run:"), "group header");
-        assert!(s.contains("shortcut for `zap run`"), "implicit-run shortcut stays");
-        assert!(s.contains("see also: zap help --all"), "dim hint at the end");
+        assert!(
+            s.contains("shortcut for `zap run`"),
+            "implicit-run shortcut stays"
+        );
+        assert!(
+            s.contains("see also: zap help --all"),
+            "dim hint at the end"
+        );
         let run = cmds::lookup("run").expect("run in registry");
         assert!(s.contains(help_names(run).as_str()), "run row present");
         assert!(!s.contains("install:"), "no other group sections");
@@ -405,9 +466,15 @@ mod tests {
                 c.name
             );
         }
-        assert!(s.contains("configuration (walks up from cwd"), "config prose");
+        assert!(
+            s.contains("configuration (walks up from cwd"),
+            "config prose"
+        );
         assert!(s.contains("typescript is built in:"), "ts prose");
-        assert!(!s.contains("categories:"), "the overview stays out of --all");
+        assert!(
+            !s.contains("categories:"),
+            "the overview stays out of --all"
+        );
     }
 
     #[test]
@@ -450,7 +517,10 @@ mod tests {
         assert!(matches!(run(&c), Ok(1)), "--help target is bare how");
         // unknown targets error, pointing at the category overview
         let s = how_unknown("nope");
-        assert!(s.contains("nope") && s.contains("zap help"), "points at zap help");
+        assert!(
+            s.contains("nope") && s.contains("zap help"),
+            "points at zap help"
+        );
         let d: Vec<String> = ["how", "nope"].iter().map(|s| s.to_string()).collect();
         assert!(run(&d).is_err(), "unknown target errors");
     }
@@ -460,7 +530,10 @@ mod tests {
 /// `<category>` = just that group's section. `--help`/`-h` among the args
 /// keep the bare view (help itself is not a registry command)
 fn help_command(rest: &[String]) -> Result<i32> {
-    let arg = rest.iter().map(|s| s.as_str()).find(|a| *a != "--help" && *a != "-h");
+    let arg = rest
+        .iter()
+        .map(|s| s.as_str())
+        .find(|a| *a != "--help" && *a != "-h");
     match arg {
         None => {
             // views carry their own trailing newline, print! keeps the exact bytes
@@ -487,7 +560,11 @@ fn help_unknown(name: &str) -> String {
     format!(
         "unknown help category '{}', valid categories: {}",
         name,
-        cmds::GROUP_INFO.iter().map(|(g, _)| *g).collect::<Vec<_>>().join(", ")
+        cmds::GROUP_INFO
+            .iter()
+            .map(|(g, _)| *g)
+            .collect::<Vec<_>>()
+            .join(", ")
     )
 }
 
@@ -499,13 +576,26 @@ fn categories_view() -> String {
         "{}\n",
         command_style("  zap help [category]        commands in one category")
     ));
-    out.push_str(&format!("{}\n", command_style("  zap help --all             everything")));
+    out.push_str(&format!(
+        "{}\n",
+        command_style("  zap help --all             everything")
+    ));
     out.push_str(&format!("\n{}\n", util::bold("categories:")));
-    let width = cmds::GROUP_INFO.iter().map(|(g, _)| g.len()).max().unwrap_or(0);
+    let width = cmds::GROUP_INFO
+        .iter()
+        .map(|(g, _)| g.len())
+        .max()
+        .unwrap_or(0);
     for (group, desc) in cmds::GROUP_INFO {
         let count = cmds::COMMANDS.iter().filter(|c| c.group == *group).count();
         let pad = " ".repeat(width - group.len());
-        out.push_str(&format!("  {}{}  {} ({} commands)\n", util::bold(group), pad, desc, count));
+        out.push_str(&format!(
+            "  {}{}  {} ({} commands)\n",
+            util::bold(group),
+            pad,
+            desc,
+            count
+        ));
     }
     out
 }
@@ -550,7 +640,9 @@ fn full_help_view() -> String {
         ts_badge(),
         util::bold("typescript is built in:")
     ));
-    out.push_str("manage the compiler + @types/* for deps that don't ship types. `zap version <ver>`\n");
+    out.push_str(
+        "manage the compiler + @types/* for deps that don't ship types. `zap version <ver>`\n",
+    );
     out.push_str("pins the compiler version; version changes install automatically.\n");
     out
 }
@@ -561,12 +653,19 @@ fn group_section(group: &str) -> String {
     let entries: Vec<&cmds::Command> = cmds::COMMANDS.iter().filter(|c| c.group == group).collect();
     // rows align to the global name width across every group, matching the
     // full listing column-for-column
-    let width = cmds::COMMANDS.iter().map(|c| help_names(c).len()).max().unwrap_or(0);
+    let width = cmds::COMMANDS
+        .iter()
+        .map(|c| help_names(c).len())
+        .max()
+        .unwrap_or(0);
     let mut out = format!("{}\n", util::bold(format!("{}:", group)));
     for c in entries {
         let names = help_names(c);
         let pad = " ".repeat(width - names.len());
-        out.push_str(&format!("{}\n", command_style(&format!("  zap {}{}  {}", names, pad, c.usage))));
+        out.push_str(&format!(
+            "{}\n",
+            command_style(&format!("  zap {}{}  {}", names, pad, c.usage))
+        ));
     }
     if group == "run" {
         // the implicit-run shortcut stays visible under the run section

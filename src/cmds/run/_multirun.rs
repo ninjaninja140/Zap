@@ -17,7 +17,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
 
-const WORDMARK: &str = include_str!("../../../zap.text.txt");
+const WORDMARK: &str = include_str!("../../../headers/zap.text.txt");
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Key {
@@ -58,8 +58,15 @@ impl Ctrl {
         }
         #[cfg(not(windows))]
         if !pids.is_empty() {
-            let list = pids.iter().map(|p| p.to_string()).collect::<Vec<_>>().join(" ");
-            let _ = Command::new("sh").arg("-c").arg(format!("kill -9 {}", list)).status();
+            let list = pids
+                .iter()
+                .map(|p| p.to_string())
+                .collect::<Vec<_>>()
+                .join(" ");
+            let _ = Command::new("sh")
+                .arg("-c")
+                .arg(format!("kill -9 {}", list))
+                .status();
         }
     }
 }
@@ -90,14 +97,23 @@ fn layout(w: usize, h: usize, header: usize, n: usize) -> Layout {
     let avail = h.saturating_sub(header);
     let pane_h = (avail / rows).clamp(3, 20);
     let rpp = (avail / pane_h).max(1);
-    Layout { cols, rows, pane_w, pane_h, rpp, pages: rows.div_ceil(rpp) }
+    Layout {
+        cols,
+        rows,
+        pane_w,
+        pane_h,
+        rpp,
+        pages: rows.div_ceil(rpp),
+    }
 }
 
 /// pane indices visible on a page, in paint order
 fn visible_panes(l: &Layout, page: usize, n: usize) -> Vec<usize> {
     let r0 = page * l.rpp;
     let r1 = (r0 + l.rpp).min(l.rows);
-    (r0..r1).flat_map(|r| r * l.cols..((r + 1) * l.cols).min(n)).collect()
+    (r0..r1)
+        .flat_map(|r| r * l.cols..((r + 1) * l.cols).min(n))
+        .collect()
 }
 
 /// screen origin + size of a pane's paint region
@@ -143,7 +159,10 @@ pub fn run_multi(
     names: &[String],
     plans: &[Vec<(String, String)>],
 ) -> Result<i32> {
-    let ctrl = Arc::new(Ctrl { pids: Mutex::new(Vec::new()), aborted: AtomicBool::new(false) });
+    let ctrl = Arc::new(Ctrl {
+        pids: Mutex::new(Vec::new()),
+        aborted: AtomicBool::new(false),
+    });
     let panes: Vec<Pane> = plans
         .iter()
         .map(|_| {
@@ -186,7 +205,12 @@ pub fn run_multi(
     let mut out = String::new();
     for (i, line) in wordmark.iter().enumerate() {
         let col = (w.saturating_sub(line.chars().count())) / 2 + 1;
-        out.push_str(&format!("\x1b[{};{}H\x1b[2K{}", i + 1, col, crate::util::electric(line)));
+        out.push_str(&format!(
+            "\x1b[{};{}H\x1b[2K{}",
+            i + 1,
+            col,
+            crate::util::electric(line)
+        ));
     }
     out.push_str(&page_indicator(0, l.pages, w, header_h, false));
     print!("{}", out);
@@ -248,7 +272,12 @@ pub fn run_multi(
             out.push_str("\x1b[2J");
             for (i, line) in wordmark.iter().enumerate() {
                 let col = (w.saturating_sub(line.chars().count())) / 2 + 1;
-                out.push_str(&format!("\x1b[{};{}H\x1b[2K{}", i + 1, col, crate::util::electric(line)));
+                out.push_str(&format!(
+                    "\x1b[{};{}H\x1b[2K{}",
+                    i + 1,
+                    col,
+                    crate::util::electric(line)
+                ));
             }
         }
         if force {
@@ -269,7 +298,13 @@ pub fn run_multi(
                 // the one final repaint is happening, freeze from here on
                 done_shown[i] = true;
             }
-            paint(&mut out, &panes[i], pane_frame(&l, header_h, page, i), &names[i], aborted);
+            paint(
+                &mut out,
+                &panes[i],
+                pane_frame(&l, header_h, page, i),
+                &names[i],
+                aborted,
+            );
         }
         if force {
             // the last page can show fewer rows, blank what a fuller page left
@@ -288,7 +323,13 @@ pub fn run_multi(
             // final pass so exit markers land even on same-tick updates
             let mut fin = String::new();
             for &i in &vis {
-                paint(&mut fin, &panes[i], pane_frame(&l, header_h, page, i), &names[i], aborted);
+                paint(
+                    &mut fin,
+                    &panes[i],
+                    pane_frame(&l, header_h, page, i),
+                    &names[i],
+                    aborted,
+                );
             }
             print!("{}", fin);
             std::io::stdout().flush()?;
@@ -328,11 +369,22 @@ pub fn run_multi(
     if interrupted {
         return Ok(130);
     }
-    Ok(panes.iter().map(|p| p.lock().unwrap().code).find(|&c| c != 0).unwrap_or(0))
+    Ok(panes
+        .iter()
+        .map(|p| p.lock().unwrap().code)
+        .find(|&c| c != 0)
+        .unwrap_or(0))
 }
 
 /// run one pane's stage sequence (pre -> script -> post) sequentially
-fn run_stages(pane: &Pane, stages: Vec<(String, String)>, cwd: &Path, env_root: &Path, linker: Linker, ctrl: &Ctrl) {
+fn run_stages(
+    pane: &Pane,
+    stages: Vec<(String, String)>,
+    cwd: &Path,
+    env_root: &Path,
+    linker: Linker,
+    ctrl: &Ctrl,
+) {
     for (i, (label, line)) in stages.iter().enumerate() {
         if ctrl.aborted.load(Ordering::SeqCst) {
             finish(pane, 130);
@@ -456,15 +508,44 @@ fn paint(out: &mut String, pane: &Pane, f: Frame, name: &str, aborted: bool) {
         // then close any open colour so the padding and borders stay default
         // shortcut: visible chars only, no unicode-width handling, wide CJK glyphs may misalign panes, upgrade when it matters
         let shown = truncate_visible(line, inner.saturating_sub(1));
-        let shown = if shown.contains('\x1b') { format!("{}\x1b[0m", shown) } else { shown };
+        let shown = if shown.contains('\x1b') {
+            format!("{}\x1b[0m", shown)
+        } else {
+            shown
+        };
         let vis = strip_ansi(&shown).chars().count();
         let padded = format!(" {}{}", shown, " ".repeat((inner - 1).saturating_sub(vis)));
         // stage separators (pushed by run_stages) render dim; borders dim to match the edges
-        let content = if line.starts_with("──") { crate::util::dim(&padded) } else { padded };
-        put(out, f.top + 1 + i, f.left, &format!("{}{}{}", crate::util::dim("│"), content, crate::util::dim("│")));
+        let content = if line.starts_with("──") {
+            crate::util::dim(&padded)
+        } else {
+            padded
+        };
+        put(
+            out,
+            f.top + 1 + i,
+            f.left,
+            &format!(
+                "{}{}{}",
+                crate::util::dim("│"),
+                content,
+                crate::util::dim("│")
+            ),
+        );
     }
     for i in tail.len()..f.body_h {
-        put(out, f.top + 1 + i, f.left, &format!("{}{:<iw$}{}", crate::util::dim("│"), "", crate::util::dim("│"), iw = inner));
+        put(
+            out,
+            f.top + 1 + i,
+            f.left,
+            &format!(
+                "{}{:<iw$}{}",
+                crate::util::dim("│"),
+                "",
+                crate::util::dim("│"),
+                iw = inner
+            ),
+        );
     }
     // bottom border with the status right-aligned: ╰──── ✓ exit 0 ╯
     let raw = if p.done {
@@ -546,7 +627,13 @@ fn page_indicator(page: usize, pages: usize, w: usize, row: usize, hang_hint: bo
     } else if pages == 1 {
         crate::util::dim(&plain)
     } else {
-        format!("{} {}/{} {}", crate::util::dim(lft), page + 1, pages, crate::util::dim(rgt))
+        format!(
+            "{} {}/{} {}",
+            crate::util::dim(lft),
+            page + 1,
+            pages,
+            crate::util::dim(rgt)
+        )
     };
     let col = (w.saturating_sub(plain.chars().count())) / 2 + 1;
     format!("\x1b[{};{}H\x1b[2K{}", row, col, styled)
@@ -581,7 +668,9 @@ fn strip_ansi(s: &str) -> String {
                     }
                 }
             }
-            _ => { it.next(); } // two-byte escape like ESC 7
+            _ => {
+                it.next();
+            } // two-byte escape like ESC 7
         }
     }
     out
@@ -631,7 +720,9 @@ fn sanitize_sgr(line: &str, state: &mut Option<String>) -> String {
                     }
                 }
             }
-            _ => { it.next(); } // two-byte escape like ESC 7
+            _ => {
+                it.next();
+            } // two-byte escape like ESC 7
         }
     }
     out
@@ -784,7 +875,13 @@ mod term {
         fn GetStdHandle(nstdhandle: u32) -> *mut c_void;
         fn GetConsoleMode(hconsole: *mut c_void, lpmode: *mut u32) -> i32;
         fn SetConsoleMode(hconsole: *mut c_void, dwmode: u32) -> i32;
-        fn ReadFile(hfile: *mut c_void, lpbuffer: *mut c_void, nnumberofbytes: u32, lpnumberofbytes: *mut u32, lpoverlapped: *mut c_void) -> i32;
+        fn ReadFile(
+            hfile: *mut c_void,
+            lpbuffer: *mut c_void,
+            nnumberofbytes: u32,
+            lpnumberofbytes: *mut u32,
+            lpoverlapped: *mut c_void,
+        ) -> i32;
         fn GetConsoleCP() -> u32;
         fn GetConsoleOutputCP() -> u32;
         fn SetConsoleCP(wcodepageid: u32) -> i32;
@@ -824,7 +921,10 @@ mod term {
             if SetConsoleMode(h, (mode & !COOKED_MASK) | ENABLE_VIRTUAL_TERMINAL_INPUT) == 0 {
                 return None;
             }
-            Some(Saved { handle: Handle(h), mode })
+            Some(Saved {
+                handle: Handle(h),
+                mode,
+            })
         }
     }
 
@@ -838,7 +938,8 @@ mod term {
 
     /// hard-kill a child by pid; grandchildren aren't chased, they finish on
     /// their own or die with the console
-    pub fn kill_pid(pid: u32) {        const PROCESS_TERMINATE: u32 = 0x0001;
+    pub fn kill_pid(pid: u32) {
+        const PROCESS_TERMINATE: u32 = 0x0001;
         unsafe {
             let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
             if !h.is_null() {
@@ -884,7 +985,13 @@ mod term {
         loop {
             let mut got = 0u32;
             let ok = unsafe {
-                ReadFile(h.0, buf.as_mut_ptr().cast(), buf.len() as u32, &mut got, std::ptr::null_mut())
+                ReadFile(
+                    h.0,
+                    buf.as_mut_ptr().cast(),
+                    buf.len() as u32,
+                    &mut got,
+                    std::ptr::null_mut(),
+                )
             };
             if ok == 0 || got == 0 {
                 break;
@@ -918,7 +1025,11 @@ mod term {
 
     /// take over the tty via stty; None when stdin is not a tty (piped)
     pub fn enable_raw() -> Option<Saved> {
-        let out = Command::new("stty").arg("-g").stdin(Stdio::inherit()).output().ok()?;
+        let out = Command::new("stty")
+            .arg("-g")
+            .stdin(Stdio::inherit())
+            .output()
+            .ok()?;
         let state = String::from_utf8_lossy(&out.stdout).trim().to_string();
         if !out.status.success() || state.is_empty() {
             return None;
@@ -937,7 +1048,10 @@ mod term {
 
     impl Saved {
         pub fn restore(&self) {
-            let _ = Command::new("stty").arg(&self.0).stdin(Stdio::inherit()).status();
+            let _ = Command::new("stty")
+                .arg(&self.0)
+                .stdin(Stdio::inherit())
+                .status();
         }
     }
 
@@ -994,7 +1108,10 @@ mod tests {
             done: false,
             code: 0,
         }));
-        let ctrl = Ctrl { pids: Mutex::new(Vec::new()), aborted: AtomicBool::new(false) };
+        let ctrl = Ctrl {
+            pids: Mutex::new(Vec::new()),
+            aborted: AtomicBool::new(false),
+        };
         let cwd = std::env::temp_dir();
         let stages = vec![
             ("prebuild".to_string(), "echo aaa".to_string()),
@@ -1036,7 +1153,7 @@ mod tests {
         let l = layout(120, 40, 2, 2);
         assert_eq!((l.cols, l.rows, l.pages), (2, 1, 1));
         assert_eq!(l.pane_w, (120 - 1) / 2); // 1-space gutter accounted for
-        // huge console: pane height capped at 20, still one page
+                                             // huge console: pane height capped at 20, still one page
         let l = layout(120, 9001, 2, 5);
         assert_eq!(l.pane_h, 20);
         assert_eq!(l.pages, 1);
@@ -1114,7 +1231,9 @@ mod tests {
         // the finished pane's frame is byte-identical on every render
         let done_frame = frame_of(&done, f0, "fast");
         assert_eq!(done_frame, frame_of(&done, f0, "fast"));
-        assert!(done_frame.contains("✓ exit 0") && done_frame.contains('╭') && done_frame.contains('╰'));
+        assert!(
+            done_frame.contains("✓ exit 0") && done_frame.contains('╭') && done_frame.contains('╰')
+        );
         // the status sits one char further left: a ─ between it and the corner
         assert!(
             strip_ansi(&done_frame).contains("✓ exit 0─╯"),
@@ -1127,8 +1246,8 @@ mod tests {
         assert!(needs_repaint(false, 5, 4, false, false)); // running and dirty
         assert!(!needs_repaint(false, 4, 4, false, false)); // running, nothing new
         assert!(needs_repaint(true, 9, 9, true, true)); // page switch repaints all
-        // repainting the running neighbor never writes into the finished
-        // pane's region: every cursor position in its frame stays in its own
+                                                        // repainting the running neighbor never writes into the finished
+                                                        // pane's region: every cursor position in its frame stays in its own
         let nf = frame_of(&running, f1, "slow");
         let s = nf.as_bytes();
         let mut k = 0;
@@ -1143,10 +1262,21 @@ mod tests {
                     // strict "row;colH" (two integer fields), sgr runs have more
                     let text = std::str::from_utf8(&s[start..j]).unwrap();
                     let mut it = text.split(';');
-                    let (row, col) = (it.next().unwrap().parse::<usize>().unwrap(), it.next().unwrap().parse::<usize>().unwrap());
+                    let (row, col) = (
+                        it.next().unwrap().parse::<usize>().unwrap(),
+                        it.next().unwrap().parse::<usize>().unwrap(),
+                    );
                     if it.next().is_none() {
-                        assert!((f1.top..=f1.top + f1.body_h + 1).contains(&row), "row {} escapes the running pane", row);
-                        assert!((f1.left..f1.left + f1.w).contains(&col), "col {} escapes the running pane", col);
+                        assert!(
+                            (f1.top..=f1.top + f1.body_h + 1).contains(&row),
+                            "row {} escapes the running pane",
+                            row
+                        );
+                        assert!(
+                            (f1.left..f1.left + f1.w).contains(&col),
+                            "col {} escapes the running pane",
+                            col
+                        );
                     }
                 }
                 k = j;
@@ -1185,7 +1315,13 @@ mod tests {
             let l = layout(w, h, 2, 4);
             for i in 0..4 {
                 let f = pane_frame(&l, 2, 0, i);
-                assert!(f.top >= 3, "pane {} header row below the wordmark at {}x{}", i, w, h);
+                assert!(
+                    f.top >= 3,
+                    "pane {} header row below the wordmark at {}x{}",
+                    i,
+                    w,
+                    h
+                );
                 assert!(
                     f.left + f.w <= w,
                     "pane {} right edge {} overflows {} cols at {}x{}",
@@ -1266,13 +1402,19 @@ mod tests {
         }
         for n in 0..starts.len() {
             let from = starts[n];
-            let to = if n + 1 < starts.len() { starts[n + 1] } else { b.len() };
+            let to = if n + 1 < starts.len() {
+                starts[n + 1]
+            } else {
+                b.len()
+            };
             let mut m = from + 2;
             while m < to && (b[m].is_ascii_digit() || b[m] == b';') {
                 m += 1;
             }
             m += 1; // the 'H'
-            let vis = strip_ansi(std::str::from_utf8(&b[m..to]).unwrap()).chars().count();
+            let vis = strip_ansi(std::str::from_utf8(&b[m..to]).unwrap())
+                .chars()
+                .count();
             if vis != w {
                 return false;
             }
@@ -1297,10 +1439,16 @@ mod tests {
         let f = pane_frame(&l, 2, 0, 1);
         let mut s = String::new();
         paint(&mut s, &running, f, "slow", false);
-        assert!(!s.contains("\x1b[2K"), "pane paint must not emit whole-line erases");
+        assert!(
+            !s.contains("\x1b[2K"),
+            "pane paint must not emit whole-line erases"
+        );
         // every positioned line covers exactly the pane's width in visible
         // chars, so the overwrite is complete and neighbors stay untouched
-        assert!(covers_exact_width(&s, f.w), "pane lines must cover exactly their width");
+        assert!(
+            covers_exact_width(&s, f.w),
+            "pane lines must cover exactly their width"
+        );
         // degenerate tiny pane: a long status clamps so every line stays w
         // wide, the fully stripped frame is title+body+bottom, no overflow
         let done: Pane = Arc::new(Mutex::new(PaneInner {
@@ -1310,11 +1458,20 @@ mod tests {
             done: true,
             code: 255,
         }));
-        let tiny = Frame { top: 3, left: 1, w: 10, body_h: 1 };
+        let tiny = Frame {
+            top: 3,
+            left: 1,
+            w: 10,
+            body_h: 1,
+        };
         let mut ts = String::new();
         paint(&mut ts, &done, tiny, "x", false);
         assert!(!ts.contains("\x1b[2K"));
-        assert_eq!(strip_ansi(&ts).chars().count(), 3 * tiny.w, "tiny pane must stay within its width");
+        assert_eq!(
+            strip_ansi(&ts).chars().count(),
+            3 * tiny.w,
+            "tiny pane must stay within its width"
+        );
         assert!(ts.contains("✗ exit"), "clamped status keeps its meaning");
     }
 
@@ -1335,13 +1492,19 @@ mod tests {
         assert_eq!(st, None);
         // carried state frames the stored line: re-opened at the start,
         // closed at the end, plain lines untouched
-        assert_eq!(with_sgr_frame("more".into(), &Some("\x1b[31;1m".into()), true), "\x1b[31;1mmore\x1b[0m");
+        assert_eq!(
+            with_sgr_frame("more".into(), &Some("\x1b[31;1m".into()), true),
+            "\x1b[31;1mmore\x1b[0m"
+        );
         assert_eq!(with_sgr_frame("open".into(), &None, true), "open\x1b[0m");
         assert_eq!(with_sgr_frame("plain".into(), &None, false), "plain");
         // a coloured line longer than the pane truncates to the correct
         // VISIBLE width with sequences intact and a clean end
         let pane: Pane = Arc::new(Mutex::new(PaneInner {
-            lines: VecDeque::from([format!("\x1b[35m{}\x1b[0m", "x".repeat(60)), "plain after".to_string()]),
+            lines: VecDeque::from([
+                format!("\x1b[35m{}\x1b[0m", "x".repeat(60)),
+                "plain after".to_string(),
+            ]),
             seq: 3,
             stage: String::new(),
             done: false,
@@ -1357,7 +1520,10 @@ mod tests {
             s.contains(&format!("\x1b[35m{}\x1b[0m", "x".repeat(budget))),
             "truncated coloured line keeps its opening sgr and ends closed"
         );
-        assert!(!s.contains("x".repeat(budget + 1).as_str()), "truncation is by visible chars");
+        assert!(
+            !s.contains("x".repeat(budget + 1).as_str()),
+            "truncation is by visible chars"
+        );
         assert!(covers_exact_width(&s, f.w), "sgr bytes must cost no width");
     }
 
@@ -1366,7 +1532,10 @@ mod tests {
         // single-page hang: the reserved row shows just the hint
         let s = strip_ansi(&page_indicator(0, 1, 100, 2, true));
         assert!(s.contains("↵ enter to exit"));
-        assert!(!s.contains("1/1"), "single-page hang replaces the counter with the hint");
+        assert!(
+            !s.contains("1/1"),
+            "single-page hang replaces the counter with the hint"
+        );
         // multi-page hang: indicator + hint folded into the same row
         let s = strip_ansi(&page_indicator(1, 2, 100, 2, true));
         assert!(s.contains("2/2") && s.contains("↵ enter to exit"));
@@ -1380,9 +1549,12 @@ mod tests {
     #[test]
     fn pane_origins_stack_without_gaps() {
         let l = layout(100, 30, 2, 5); // cols=3 rows=2, everything fits
-        // first row of panes starts right under the header
+                                       // first row of panes starts right under the header
         let f0 = pane_frame(&l, 2, 0, 0);
-        assert_eq!((f0.top, f0.left, f0.w, f0.body_h), (3, 1, l.pane_w, l.pane_h - 2));
+        assert_eq!(
+            (f0.top, f0.left, f0.w, f0.body_h),
+            (3, 1, l.pane_w, l.pane_h - 2)
+        );
         // 1-space gutter between horizontally adjacent panes
         assert_eq!(pane_frame(&l, 2, 0, 1).left, 1 + l.pane_w + 1);
         // second row sits directly on the first (no blank row between)
