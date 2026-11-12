@@ -524,11 +524,12 @@ mod tests {
             });
             std::fs::write(cache.join(format!("{}.json", key)), wrapped.to_string()).unwrap();
         };
+        let host = host_platform(); // before the seeds: the matching variant is built for THIS host
         seed(
             "pkgplat",
             serde_json::json!({
                 "name": "pkgplat",
-                "versions": { "1.0.0": { "version": "1.0.0", "optionalDependencies": { "pkgplat-win": "^1.0.0", "pkgplat-linux": "^1.0.0" }, "dist": { "tarball": "https://registry.npmjs.org/pkgplat/-/pkgplat-1.0.0.tgz" } } },
+                "versions": { "1.0.0": { "version": "1.0.0", "optionalDependencies": { "pkgplat-win": "^1.0.0", "pkgplat-linux": "^1.0.0", "pkgplat-host": "^1.0.0" }, "dist": { "tarball": "https://registry.npmjs.org/pkgplat/-/pkgplat-1.0.0.tgz" } } },
                 "dist-tags": { "latest": "1.0.0" },
             }),
         );
@@ -557,6 +558,22 @@ mod tests {
             }),
         );
         seed(
+            "pkgplat-host",
+            serde_json::json!({
+                "name": "pkgplat-host",
+                "versions": { "1.0.0": { "version": "1.0.0", "os": [host.0], "cpu": [host.1], "dependencies": { "host-helper": "^1.0.0" }, "dist": { "tarball": "https://registry.npmjs.org/x/-/x-1.0.0.tgz" } } },
+                "dist-tags": { "latest": "1.0.0" },
+            }),
+        );
+        seed(
+            "host-helper",
+            serde_json::json!({
+                "name": "host-helper",
+                "versions": { "1.0.0": { "version": "1.0.0", "dist": { "tarball": "https://registry.npmjs.org/x/-/x-1.0.0.tgz" } } },
+                "dist-tags": { "latest": "1.0.0" },
+            }),
+        );
+        seed(
             "pkgplat-meta",
             serde_json::json!({
                 "name": "pkgplat-meta",
@@ -573,32 +590,48 @@ mod tests {
             .unwrap();
         std::env::remove_var("ZAP_HOME");
 
-        let host = host_platform();
-        // the matching variant resolves; the other vanishes (win32-only pack
-        // on a linux host and vice versa)
-        let want = if host.0 == "win32" { "pkgplat-win@1.0.0" } else { "pkgplat-linux@1.0.0" };
-        let gone = if host.0 == "win32" { "pkgplat-linux@1.0.0" } else { "pkgplat-win@1.0.0" };
-        assert!(tree.packages.contains_key(want), "matching variant in the tree");
-        assert!(!tree.packages.contains_key(gone), "mismatched variant skipped");
-        // the skipped variant's transitive deps disappear with it (the
-        // linux-only helper hangs off the linux variant: present on linux,
-        // gone on windows with its parent)
-        if host.0 == "win32" {
-            assert!(!tree.packages.contains_key("linux-only-helper@1.0.0"), "transitive gone too");
-        } else {
-            assert!(tree.packages.contains_key("linux-only-helper@1.0.0"), "transitive rides with the matching variant");
+        // the matching variant resolves on EVERY host (built from
+        // host_platform()); the two fixed variants vanish unless the host is
+        // their platform, so the skip count is 1 on win/linux, 2 on darwin
+        assert!(tree.packages.contains_key("pkgplat-host@1.0.0"), "matching variant in the tree");
+        for foreign in ["pkgplat-win@1.0.0", "pkgplat-linux@1.0.0"] {
+            let is_os = (foreign.starts_with("pkgplat-win") && host.0 == "win32")
+                || (foreign.starts_with("pkgplat-linux") && host.0 == "linux");
+            if is_os {
+                assert!(tree.packages.contains_key(foreign), "own-host variant present: {}", foreign);
+            } else {
+                assert!(!tree.packages.contains_key(foreign), "foreign variant skipped: {}", foreign);
+            }
         }
-        assert_eq!(skipped, 1, "one platform skip counted");
+        // the matching variant's transitive rides with it, on every host
+        assert!(tree.packages.contains_key("host-helper@1.0.0"), "host transitive rides");
+        // the linux-only helper hangs off pkgplat-linux: present iff linux host
+        assert_eq!(
+            tree.packages.contains_key("linux-only-helper@1.0.0"),
+            host.0 == "linux",
+            "linux transitive rides only on linux"
+        );
+        if host.0 == "darwin" {
+            assert_eq!(skipped, 2, "both foreign variants skip on darwin");
+        } else {
+            assert_eq!(skipped, 1, "one platform skip counted");
+        }
         // the resolved pkgplat's dep map references only the matching variant;
         // the root map still points at pkgplat itself
         assert_eq!(tree.root.get("pkgplat").map(|s| s.as_str()), Some("pkgplat@1.0.0"));
         let plat_deps = &tree.packages["pkgplat@1.0.0"].deps;
         assert!(
-            plat_deps.values().any(|id| id == want),
+            plat_deps.values().any(|id| id == "pkgplat-host@1.0.0"),
             "matching variant referenced: {:?}",
             plat_deps
         );
-        assert!(!plat_deps.values().any(|id| id == gone), "skipped variant unreferenced");
+        // foreign variants referenced only when the host is their platform
+        for foreign in ["pkgplat-win", "pkgplat-linux"] {
+            let referenced = plat_deps.values().any(|id| id.starts_with(foreign));
+            let is_os = (foreign == "pkgplat-win" && host.0 == "win32")
+                || (foreign == "pkgplat-linux" && host.0 == "linux");
+            assert_eq!(referenced, is_os, "{} reference vs host {}", foreign, host.0);
+        }
         // a direct dep declaring a single-string os field is gated the same
         // way when reached directly
         let root_deps = BTreeMap::from([("pkgplat-meta".to_string(), "^1.0.0".to_string())]);

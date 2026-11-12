@@ -45,15 +45,27 @@ const api = require('../dist/index.js');
 	// add/remove round-trip through a per-instance Zap (cwd pinned to the
 	// fixture), dev: true must land in devDependencies, manifest restored
 	const z = new api.Zap({ cwd: process.cwd() });
+	// make the round-trip idempotent: a previous failed run may have left
+	// is-odd behind; clean it first (throws when it wasn't there, fine)
+	try {
+		await z.remove(['is-odd']);
+	} catch {}
 	const before = JSON.parse(fs.readFileSync('package.json', 'utf8'));
+	// mutating calls return the parsed install report (json forced)
 	const added = await z.add(['is-odd'], { dev: true });
-	console.log(`z.add(['is-odd'], { dev: true }) -> code ${added.code}`);
+	console.log(`z.add(['is-odd'], { dev: true }) -> code ${added.code}, added=${JSON.stringify(added.data.added)}, lifecycle=${added.data.lifecycle.ran} ran`);
 	assert.equal(added.code, 0);
-	const mid = JSON.parse(fs.readFileSync('package.json', 'utf8'));
-	assert.ok(Object.keys(mid.devDependencies ?? {}).includes('is-odd'), 'is-odd should be in devDependencies');
+	assert.ok(added.data.added.some(([id]) => id.startsWith('is-odd@')), 'report carries the tree-level added');
+	assert.ok(Object.keys(JSON.parse(fs.readFileSync('package.json', 'utf8')).devDependencies ?? {}).includes('is-odd'), 'is-odd should be in devDependencies');
+	// an install doc on the same tree: empty delta, tree intact
+	const inst = await z.install();
+	console.log(`z.install() -> done=${inst.data.donePackages}, added=${inst.data.added.length}, linked=${inst.data.linkedFiles} files`);
+	assert.equal(inst.code, 0);
+	assert.ok(inst.data.added.length === 0 && inst.data.donePackages > 0, 'no-op install: empty delta, tree counted');
 	const removed = await z.remove(['is-odd']);
-	console.log(`z.remove(['is-odd']) -> code ${removed.code}`);
+	console.log(`z.remove(['is-odd']) -> code ${removed.code}, removed=${JSON.stringify(removed.data.removed)}`);
 	assert.equal(removed.code, 0);
+	assert.ok(removed.data.removed.some((id) => id.startsWith('is-odd@')), 'report carries the removal');
 	const after = JSON.parse(fs.readFileSync('package.json', 'utf8'));
 	// zap keeps a section once it exists: an emptied devDependencies is the
 	// only allowed residue; the original bytes go back so the fixture stays put

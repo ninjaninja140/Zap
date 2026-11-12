@@ -63,11 +63,17 @@ pub static SPECS: &[ApiSpec] = &[
         options: &[
             flag!("--dev", Some("-D"), Bool, "record into devDependencies instead of dependencies"),
             flag!("--global", Some("-g"), Bool, "install into ~/.zap/global with bins shimmed to ~/.zap/bin, no project needed"),
+            flag!("--json", None, Bool, "suppress the human output, print the install report document instead"),
         ],
         positionals: &[pos!("specs", StrList, false, false, "package specs: name, name@range or name@latest; workspace members link as workspace:*")],
-        returns: RUNRESULT,
+        returns: "InstallJson",
     },
-    ApiSpec { name: "ci", options: &[], positionals: &[], returns: RUNRESULT },
+    ApiSpec {
+        name: "ci",
+        options: &[flag!("--json", None, Bool, "suppress the human output, print the install report document instead")],
+        positionals: &[],
+        returns: "InstallJson",
+    },
     ApiSpec { name: "init", options: &[], positionals: &[], returns: RUNRESULT },
     ApiSpec {
         name: "install",
@@ -77,9 +83,10 @@ pub static SPECS: &[ApiSpec] = &[
             flag!("--refresh", None, Bool, "bypass the metadata cache and refetch packuments"),
             flag!("--frozen-lockfile", None, Bool, "fail instead of updating .zap-lock.json when manifests changed (CI)"),
             flag!("--production", Some("-P"), Bool, "production deps only, devDependencies skipped"),
+            flag!("--json", None, Bool, "suppress the human output, print the install report document instead"),
         ],
         positionals: &[],
-        returns: RUNRESULT,
+        returns: "InstallJson",
     },
     ApiSpec {
         name: "outdated",
@@ -92,9 +99,12 @@ pub static SPECS: &[ApiSpec] = &[
     },
     ApiSpec {
         name: "remove",
-        options: &[flag!("--global", Some("-g"), Bool, "remove global installs: the package dir and its shims")],
+        options: &[
+            flag!("--global", Some("-g"), Bool, "remove global installs: the package dir and its shims"),
+            flag!("--json", None, Bool, "suppress the human output, print the install report document instead"),
+        ],
         positionals: &[pos!("pkgs", StrList, false, false, "package names to drop from the manifest (dev deps from their own section)")],
-        returns: RUNRESULT,
+        returns: "InstallJson",
     },
     ApiSpec {
         name: "upgrade",
@@ -268,6 +278,12 @@ pub static SPECS: &[ApiSpec] = &[
             flag!("--yes", Some("-y"), Bool, "skip the confirmation"),
         ],
         positionals: &[],
+        returns: RUNRESULT,
+    },
+    ApiSpec {
+        name: "set-version",
+        options: &[],
+        positionals: &[pos!("version", Str, true, false, "an exact x.y.z (verified against the releases list) or `latest`; empty prints the pin")],
         returns: RUNRESULT,
     },
     ApiSpec {

@@ -305,6 +305,10 @@ pub fn doctor_cmd(_args: &[String]) -> Result<i32> {
         None => check(false, "", "no .zap-lock.json, run `zap install`"),
     }
 
+    // install source (npm shim vs script/binary install), informational,
+    // update flows will key off it later
+    println!("  {} install source: {}", green("ok"), crate::util::install_source());
+
     // runtime present for the configured linker
     match cfg.linker {
         crate::config::Linker::Pnp => {

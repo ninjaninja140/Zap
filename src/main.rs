@@ -19,6 +19,7 @@ use anyhow::Result;
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const LOGO: &str = include_str!("../zap.emblem.txt");
 const HEADING: &str = include_str!("../zap.heading.txt");
+const UPDATE: &str = include_str!("../zap.update.txt");
 
 fn ts_badge() -> String {
     "\x1b[48;2;49;120;198m\x1b[97m TS \x1b[0m".to_string()
@@ -68,6 +69,61 @@ pub fn heading_block(badge: &str, full: &str) -> String {
 fn print_heading(args: &[String]) {
     let badge = args.first().map(|s| s.as_str()).unwrap_or("");
     println!("{}", heading_block(badge, &args.join(" ")));
+}
+
+// the update-available banner (zap.update.txt + the cached github check)
+
+/// commands whose runs may hit the network → eligible for the banner.
+/// run/exec/x/dlx stay quiet forever (scripts never get update noise),
+/// the offline commands (help/config/doctor) too
+fn update_banner_cmd(cmd: &str) -> bool {
+    matches!(
+        cmd,
+        "install" | "add" | "remove" | "view" | "info" | "outdated" | "inspect" | "publish" | "login" | "whoami"
+    )
+}
+
+/// the update hint per install source: npm installs update through npm,
+/// dev builds through cargo, script installs through the version pin
+fn update_hint() -> &'static str {
+    match util::install_source() {
+        "npm" => "npm update @zappkg/cli -g",
+        "dev" => "rebuild: cargo build --release",
+        _ => "zap set-version latest",
+    }
+}
+
+/// pure: the banner block from zap.update.txt (NEW/CURRENT/UPDATE_HINT tokens;
+/// the code supplies the v prefixes, the art stays bare)
+fn update_banner(new: &str, cur: &str) -> String {
+    UPDATE
+        .replace("UPDATE_HINT", update_hint())
+        .replace("NEW", &format!("v{}", new))
+        .replace("CURRENT", &format!("v{}", cur))
+        .trim_end()
+        .to_string()
+}
+
+/// pure: the release is semver-newer than the running build; garbage
+/// comparisons never banner
+fn update_newer(new: &str, cur: &str) -> bool {
+    match (semver::Version::parse(new), semver::Version::parse(cur)) {
+        (Ok(n), Ok(c)) => n > c,
+        _ => false,
+    }
+}
+
+/// the whole check for a command, fail-silent by contract (any fetch/parse
+/// trouble = no banner, never an error surface)
+fn update_banner_for(cmd: &str) -> Option<String> {
+    if !update_banner_cmd(cmd) {
+        return None;
+    }
+    let latest = http::cached_update_check()?;
+    if !update_newer(&latest, VERSION) {
+        return None;
+    }
+    Some(update_banner(&latest, VERSION))
 }
 
 fn banner() -> String {
@@ -133,6 +189,12 @@ fn run(args: &[String]) -> Result<i32> {
     if !cmd.is_empty() && !matches!(cmd, "help" | "-h" | "--help") && !rest.iter().any(|a| a == "--json") {
         print_heading(args);
         println!();
+        // the update banner rides the same gate as the heading (machine mode
+        // stays clean); one blank line separates it from the command's output
+        if let Some(b) = update_banner_for(cmd) {
+            println!("{}", util::yellow(b));
+            println!();
+        }
     }
 
     match cmd {
@@ -141,7 +203,7 @@ fn run(args: &[String]) -> Result<i32> {
         // a find_root error, inside them the scripts listing)
         "" => help_command(&[]),
         "version-flag" | "-v" | "--version" => {
-            println!("zap {}", VERSION);
+            println!("zap {} ({})", VERSION, util::install_source());
             Ok(0)
         }
         "help" | "-h" | "--help" => help_command(&rest),
@@ -229,6 +291,60 @@ mod tests {
         assert!(s.contains("UPGRADE"), "the badge collapses to the canonical name");
         assert!(s.contains("> upgrade --interactive chalk"), "full command as typed");
         assert!(s.contains("no args: re-resolve"), "usage from the registry");
+    }
+
+    #[test]
+    fn update_banner_gate_covers_the_network_commands() {
+        for c in ["install", "add", "remove", "view", "info", "outdated", "inspect", "publish", "login", "whoami"] {
+            assert!(update_banner_cmd(c), "{} should banner", c);
+        }
+        for c in ["run", "exec", "x", "dlx", "help", "config", "doctor", "ci", "migrate", "pack", "logout", ""] {
+            assert!(!update_banner_cmd(c), "{} should stay quiet", c);
+        }
+    }
+
+    #[test]
+    fn update_newer_is_semver_strict() {
+        assert!(update_newer("0.7.0", "0.1.0"));
+        assert!(!update_newer("0.1.0", "0.7.0"));
+        assert!(!update_newer("0.1.0", "0.1.0"), "equal versions never banner");
+        // prereleases don't beat the stable of the same version
+        assert!(!update_newer("0.1.0-beta.1", "0.1.0"));
+        // garbage either side → no banner
+        assert!(!update_newer("not-a-version", "0.1.0"));
+        assert!(!update_newer("0.7.0", "not-a-version"));
+    }
+
+    #[test]
+    fn update_banner_replaces_every_token() {
+        let b = update_banner("0.7.0", "0.1.0");
+        assert!(!b.contains("NEW") && !b.contains("CURRENT") && !b.contains("UPDATE_HINT"), "all tokens replaced: {}", b);
+        assert!(b.contains("zap v0.7.0"), "new version shown: {}", b);
+        assert!(b.contains("v0.1.0"), "current version shown: {}", b);
+        assert!(b.lines().count() == 4, "the art's 4 lines survive: {}", b);
+        // the hint follows the install source (this test binary: no shim env → script hint)
+        assert!(b.contains(update_hint()), "hint line present: {}", b);
+    }
+
+    #[test]
+    fn update_banner_for_silent_offline_commands() {
+        use std::path::PathBuf;
+        fn tempdir(tag: &str) -> PathBuf {
+            let dir = std::env::temp_dir().join(format!("zap-banner-{}-{}", tag, std::process::id()));
+            let _ = std::fs::remove_dir_all(&dir);
+            std::fs::create_dir_all(&dir).unwrap();
+            dir
+        }
+        assert_eq!(update_banner_for("run"), None, "run never banners");
+        assert_eq!(update_banner_for("help"), None);
+        // a banner command with no check data (no cache file) → silent, never an error
+        let _env = crate::cmds::env_test_lock();
+        let home = tempdir("empty");
+        std::env::set_var("ZAP_HOME", &home);
+        let r = update_banner_for("view");
+        std::env::remove_var("ZAP_HOME");
+        let _ = std::fs::remove_dir_all(&home);
+        assert_eq!(r, None, "no cache + no network → silent, never an error");
     }
 
     #[test]

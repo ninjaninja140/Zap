@@ -35,6 +35,46 @@ pub fn electric_bold(s: impl AsRef<str>) -> String {
     format!("\x1b[1;38;2;49;86;255m{}\x1b[0m", s.as_ref())
 }
 
+// how was this zap installed? the npm shim sets __ZAP_VIA=npm before
+// spawning the binary; a script install leaves the binary at ~/.zap/bin;
+// dev builds run with ZAP_API_PATH pointing at a local cargo build. the
+// update banner keys off this (npm → npm update, dev → rebuild, script →
+// the version pin)
+pub fn install_source() -> &'static str {
+    if std::env::var_os("ZAP_DEV_PATH").is_some() {
+        return "dev";
+    }
+    if std::env::var("__ZAP_VIA").as_deref() == Ok("npm") {
+        return "npm";
+    }
+    if let Ok(bin) = zap_home() {
+        let exe = if cfg!(windows) { "zap.exe" } else { "zap" };
+        if bin.join("bin").join(exe).is_file() {
+            return "script";
+        }
+    }
+    "binary"
+}
+
+// the version pin (script installs only): ~/.zap/version, `<version>\n`,
+// read by the shell installers, written by `zap set-version`
+pub fn version_pin_path() -> Result<PathBuf> {
+    Ok(zap_home()?.join("version"))
+}
+
+pub fn read_version_pin() -> Result<Option<String>> {
+    let Ok(t) = std::fs::read_to_string(version_pin_path()?) else {
+        return Ok(None);
+    };
+    let t = t.trim().to_string();
+    Ok((!t.is_empty()).then_some(t))
+}
+
+pub fn write_version_pin(v: &str) -> Result<()> {
+    std::fs::create_dir_all(zap_home()?)?;
+    Ok(std::fs::write(version_pin_path()?, format!("{}\n", v))?)
+}
+
 pub fn home() -> Result<PathBuf> {
     // ZAP_HOME overrides everything (CI caches, docker cache mounts)
     if let Ok(h) = std::env::var("ZAP_HOME") {
@@ -302,6 +342,32 @@ fn hyphen_req(range: &str) -> Option<semver::VersionReq> {
 mod tests {
     use super::*;
     use crate::model::{Packument, VersionInfo};
+
+    #[test]
+    fn install_source_reads_the_env_and_the_script_install() {
+        let _env = crate::cmds::env_test_lock();
+        // dev override wins over everything
+        std::env::set_var("ZAP_DEV_PATH", "some/build/zap.exe");
+        assert_eq!(install_source(), "dev");
+        std::env::remove_var("ZAP_DEV_PATH");
+        // the npm shim's marker
+        std::env::set_var("__ZAP_VIA", "npm");
+        assert_eq!(install_source(), "npm");
+        std::env::remove_var("__ZAP_VIA");
+        // a script install: zap(.exe) under $ZAP_HOME/.zap/bin (zap_home() adds .zap)
+        let home = std::env::temp_dir().join(format!("zap-src-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&home);
+        let exe = if cfg!(windows) { "zap.exe" } else { "zap" };
+        let script_bin = home.join(".zap").join("bin");
+        std::fs::create_dir_all(&script_bin).unwrap();
+        std::fs::write(script_bin.join(exe), "binary").unwrap();
+        std::env::set_var("ZAP_HOME", &home);
+        assert_eq!(install_source(), "script");
+        // nothing planted (same temp ZAP_HOME) → the generic binary case
+        std::fs::remove_dir_all(&script_bin).unwrap();
+        assert_eq!(install_source(), "binary");
+        let _ = std::fs::remove_dir_all(&home);
+    }
 
     fn pack(versions: &[&str], latest: &str) -> Packument {
         let mut versions_map = std::collections::BTreeMap::new();

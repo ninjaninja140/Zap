@@ -22,9 +22,11 @@
     "install.js",
     "README.md"
   ],
-  "dependencies": {
-    "tar": "^7.4.3",
+  "devDependencies": {
     "@biomejs/biome": "^2.6.6"
+  },
+  "dependencies": {
+    "tar": "^7.4.3"
   }
 }
 

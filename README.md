@@ -22,7 +22,6 @@ MIT, see [LICENSE](LICENSE). © 2026 ninjaninja140
 |---|---|
 | npm | `npm install @zappkg/cli -g` (downloads the binary for your platform at install; `ZAP_DEV_PATH` overrides for dev) |
 | from source | `cargo build --release` in this repo |
-| more | an installer from zap.nn140.uk / github releases is planned (see TODO) |
 
 ## Why does zap exist?
 
@@ -47,7 +46,7 @@ MIT, see [LICENSE](LICENSE). © 2026 ninjaninja140
 | `zap init` | create a package.json (+ zap runtime ignores in .gitignore) |
 | `zap add <pkg>[@range]...` | add deps (`--dev`/`-D`; workspace member names auto-link as `workspace:*`); `-g` installs globally |
 | `zap remove <pkg>...` | remove deps; `-g` removes a global package |
-| `zap i[nstall]` | install root + workspaces, `--offline`, `--force`, `--refresh`; hand-edited manifests sync on install (missing deps resolve in, removed ones prune out of lockfile + runtime) |
+| `zap i[nstall]` | install root + workspaces, `--offline`, `--force`, `--refresh`; hand-edited manifests sync on install; `--json` emits an install report (added/removed/changed, fetch/link/lifecycle stats) |
 | `zap ci` | clean install, production deps only (docker/CI builds) |
 | `zap run <script> [args]` | run a package.json script with the linker active (see running scripts below) |
 | `zap run a b c` | run several scripts concurrently in a live split-pane view |

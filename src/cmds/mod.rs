@@ -149,7 +149,17 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/api/src/api.gen.ts");
         let Ok(src) = std::fs::read_to_string(&path) else { return };
         for s in api_spec::SPECS {
-            assert!(src.contains(&format!("function {}Argv", s.name)), "api.gen.ts missing builder for `{}`", s.name);
+            // hyphenated names camelCase in ts identifiers ("set-version" → "setVersion")
+            let mut ts = String::new();
+            for (i, part) in s.name.split('-').enumerate() {
+                if i == 0 {
+                    ts.push_str(part);
+                } else if let Some(c) = part.chars().next() {
+                    ts.push(c.to_ascii_uppercase());
+                    ts.push_str(&part[1..]);
+                }
+            }
+            assert!(src.contains(&format!("function {ts}Argv")), "api.gen.ts missing builder for `{}`", s.name);
             for o in s.options {
                 assert!(src.contains(o.flag), "api.gen.ts missing flag `{}` (spec of `{}`)", o.flag, s.name);
             }

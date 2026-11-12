@@ -126,58 +126,60 @@ export { COMMANDS, ZAP_VERSION } from './src/commands.gen';
 export type { CommandMeta } from './src/commands.gen';
 
 import type {
-	AddOptions,
-	AllowOptions,
-	ConfigOptions,
-	InstallOptions,
-	LoginOptions,
-	LsOptions,
-	MigrateOptions,
-	OutdatedOptions,
-	PublishOptions,
-	RemoveOptions,
-	SkillsOptions,
-	UpgradeOptions,
-	VersionOptions,
-	ViewOptions,
-	WhyOptions,
-	ZapApi,
+    AddOptions,
+    AllowOptions,
+    CiOptions,
+    ConfigOptions,
+    InstallOptions,
+    LoginOptions,
+    LsOptions,
+    MigrateOptions,
+    OutdatedOptions,
+    PublishOptions,
+    RemoveOptions,
+    SkillsOptions,
+    UpgradeOptions,
+    VersionOptions,
+    ViewOptions,
+    WhyOptions,
+    ZapApi,
 } from './src/api.gen';
 import {
-	addArgv,
-	allowArgv,
-	auditArgv,
-	binArgv,
-	cacheArgv,
-	ciArgv,
-	configArgv,
-	createArgv,
-	dlxArgv,
-	doctorArgv,
-	execArgv,
-	initArgv,
-	inspectArgv,
-	installArgv,
-	licensesArgv,
-	loginArgv,
-	logoutArgv,
-	lsArgv,
-	migrateArgv,
-	outdatedArgv,
-	packArgv,
-	publishArgv,
-	registryArgv,
-	removeArgv,
-	runArgv,
-	skillsArgv,
-	storeArgv,
-	tscArgv,
-	upgradeArgv,
-	versionArgv,
-	viewArgv,
-	whoamiArgv,
-	whyArgv,
-	xArgv,
+    addArgv,
+    allowArgv,
+    auditArgv,
+    binArgv,
+    cacheArgv,
+    ciArgv,
+    configArgv,
+    createArgv,
+    dlxArgv,
+    doctorArgv,
+    execArgv,
+    initArgv,
+    inspectArgv,
+    installArgv,
+    licensesArgv,
+    loginArgv,
+    logoutArgv,
+    lsArgv,
+    migrateArgv,
+    outdatedArgv,
+    packArgv,
+    publishArgv,
+    registryArgv,
+    removeArgv,
+    runArgv,
+    setVersionArgv,
+    skillsArgv,
+    storeArgv,
+    tscArgv,
+    upgradeArgv,
+    versionArgv,
+    viewArgv,
+    whoamiArgv,
+    whyArgv,
+    xArgv,
 } from './src/api.gen';
 
 // json schemas (the read commands' --json documents)
@@ -225,6 +227,35 @@ export interface OutdatedRow {
 export interface OutdatedJson {
 	outdated: OutdatedRow[];
 	upToDate: OutdatedRow[];
+}
+
+// the mutating commands' install report (one shape for install/add/remove/ci)
+export interface FetchStats {
+	count: number;
+	bytes: number;
+	fromStore: number;
+}
+
+export interface LifecycleStats {
+	ran: number;
+	blocked: number;
+}
+
+export interface InstallJson {
+	/** [pkg_id, manifest section that pulled it in], newly in the tree */
+	added: [string, string][];
+	/** ids gone vs the previous lockfile */
+	removed: string[];
+	/** [new id, old version, new version] */
+	changed: [string, string, string][];
+	fetched: FetchStats;
+	linkedFiles: number;
+	skippedPlatform: number;
+	/** the rendered peer-dependency warning lines */
+	peers: string[];
+	lifecycle: LifecycleStats;
+	donePackages: number;
+	seconds: number;
 }
 
 export type WithData<T> = RunResult & { data: T };
@@ -277,28 +308,28 @@ export class Zap implements ZapApi {
 		return this.spawn(args).then((r) => withJson<T>(r));
 	}
 
-	add(specs: string[], options?: AddOptions): Promise<RunResult> {
-		return this.spawn(addArgv(specs, options));
+	add(specs: string[], options?: AddOptions): Promise<WithData<InstallJson>> {
+		return this.json<InstallJson>(addArgv(specs, { ...options, json: true }));
 	}
 
-	ci(): Promise<RunResult> {
-		return this.spawn(ciArgv());
+	ci(options?: CiOptions): Promise<WithData<InstallJson>> {
+		return this.json<InstallJson>(ciArgv({ ...options, json: true }));
 	}
 
 	init(): Promise<RunResult> {
 		return this.spawn(initArgv());
 	}
 
-	install(options?: InstallOptions): Promise<RunResult> {
-		return this.spawn(installArgv(options));
+	install(options?: InstallOptions): Promise<WithData<InstallJson>> {
+		return this.json<InstallJson>(installArgv({ ...options, json: true }));
 	}
 
 	outdated(options?: OutdatedOptions): Promise<WithData<OutdatedJson>> {
 		return this.json<OutdatedJson>(outdatedArgv({ ...options, json: true }));
 	}
 
-	remove(pkgs: string[], options?: RemoveOptions): Promise<RunResult> {
-		return this.spawn(removeArgv(pkgs, options));
+	remove(pkgs: string[], options?: RemoveOptions): Promise<WithData<InstallJson>> {
+		return this.json<InstallJson>(removeArgv(pkgs, { ...options, json: true }));
 	}
 
 	upgrade(pkgs?: string[], options?: UpgradeOptions): Promise<RunResult> {
@@ -412,4 +443,11 @@ export class Zap implements ZapApi {
 	skills(options?: SkillsOptions): Promise<RunResult> {
 		return this.spawn(skillsArgv(options));
 	}
+
+	setVersion(version?: string): Promise<RunResult> {
+		return this.spawn(setVersionArgv(version));
+	}
 }
+
+/** the shared default instance: process.cwd(), binary via the standard chain */
+export const zapApi: ZapApi = new Zap();

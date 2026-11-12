@@ -175,7 +175,55 @@ pub fn global_ls() -> Result<i32> {
 
 // install
 
+/// structured result of one install pass (json mode's document); serde
+/// camelCase so the ts side reads it without translation
+#[derive(serde::Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct FetchStats {
+    pub count: u64,
+    pub bytes: u64,
+    pub from_store: u64,
+}
+
+#[derive(serde::Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct LifecycleStats {
+    pub ran: u32,
+    pub blocked: u32,
+}
+
+#[derive(serde::Serialize, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct InstallReport {
+    /// (pkg_id, manifest section that pulled it in): newly in the tree
+    pub added: Vec<(String, String)>,
+    /// ids gone vs the previous lockfile
+    pub removed: Vec<String>,
+    /// (new id, old version, new version)
+    pub changed: Vec<(String, String, String)>,
+    pub fetched: FetchStats,
+    pub linked_files: u64,
+    pub skipped_platform: usize,
+    /// the rendered peer-dependency warning lines (same text the human mode prints)
+    pub peers: Vec<String>,
+    pub lifecycle: LifecycleStats,
+    pub done_packages: usize,
+    pub seconds: f64,
+}
+
 pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, String>>) -> Result<i32> {
+    let json = args.iter().any(|a| a == "--json");
+    let (code, report) = install_in_core(root, args, pins, json)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    }
+    Ok(code)
+}
+
+/// the core: `json` gates every human print (inert bar, no summary lines) and
+/// collects the structured report instead, the document is dumped by
+/// install_in so stdout carries only the json
+pub(crate) fn install_in_core(root: &Path, args: &[String], pins: Option<&BTreeMap<String, String>>, json: bool) -> Result<(i32, InstallReport)> {
     let force = args.iter().any(|a| a == "--force" || a == "-f");
     let offline = args.iter().any(|a| a == "--offline");
     let refresh = args.iter().any(|a| a == "--refresh");
@@ -183,7 +231,17 @@ pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, S
     let production = args.iter().any(|a| a == "--production" || a == "-P" || a == "--prod" || a == "--omit=dev");
     let cfg = Config::load(root);
     let started = std::time::Instant::now();
-    let progress = Arc::new(crate::cmds::progress::Progress::start(cfg.concurrency.min(8)));
+    // the previous lockfile, for the tree-level diff (captured before resolve
+    // rewrites it; None on first install)
+    let prev_lock = crate::lockfile::read(&root.join(".zap-lock.json"))?;
+    let mut report = InstallReport::default();
+    let progress = Arc::new(if json {
+        // json mode: never a bar
+        crate::cmds::progress::Progress::start_with(false, cfg.concurrency.min(8))
+    } else {
+        // human mode: tty-probed exactly as before
+        crate::cmds::progress::Progress::start(cfg.concurrency.min(8))
+    });
 
     let manifest = crate::util::read_json(&root.join("package.json"))?;
     let (deps, dev) = read_deps_from(&manifest);
@@ -219,8 +277,11 @@ pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, S
             || root.join(".zap").is_dir()
             || root.join("node_modules").exists();
         if !has_state {
-            println!("{}", dim("nothing to install (no dependencies)"));
-            return Ok(0);
+            report.seconds = started.elapsed().as_secs_f64();
+            if !json {
+                println!("{}", dim("nothing to install (no dependencies)"));
+            }
+            return Ok((0, report));
         }
     }
     let reg = crate::http::Registry::new(
@@ -340,35 +401,47 @@ pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, S
     ))?;
     // the bar clears (thread joined) before any summary line prints
     progress.finish();
-    if skipped > 0 {
+    report.skipped_platform = skipped;
+    if skipped > 0 && !json {
         let (ho, hc) = crate::resolve::host_platform();
         println!(
             "{}",
             dim(format!("skipped {} platform-mismatched package(s) (host is {}:{})", skipped, ho, hc))
         );
     }
-    // peer-dependency advisories: warn + recommend, never auto-install
-    if !peers.is_empty() {
-        let provided: BTreeMap<String, String> =
-            tree.packages.keys().map(|id| (id.clone(), id.rsplit_once('@').map(|x| x.1.to_string()).unwrap_or_default())).collect();
-        for w in crate::resolve::peer_warnings(&peers, &provided) {
+    // peer-dependency advisories: warn + recommend, never auto-install; the
+    // rendered lines are the report's peers (same text either mode)
+    let provided: BTreeMap<String, String> =
+        tree.packages.keys().map(|id| (id.clone(), id.rsplit_once('@').map(|x| x.1.to_string()).unwrap_or_default())).collect();
+    let peer_lines = crate::resolve::peer_warnings(&peers, &provided);
+    report.peers = peer_lines.clone();
+    if !json {
+        for w in peer_lines {
             println!("{}", w);
         }
     }
-    println!(
-        "  {} {} ({}) · {} from local store · {} files linked in {:.2}s",
-        green("fetched"),
-        fetched_count,
-        crate::util::human(fetched_bytes),
-        tree.packages.len() as u64 - fetched_count,
-        linked_files,
-        mat_secs
-    );
+    report.fetched = FetchStats {
+        count: fetched_count,
+        bytes: fetched_bytes,
+        from_store: tree.packages.len() as u64 - fetched_count,
+    };
+    report.linked_files = linked_files;
+    if !json {
+        println!(
+            "  {} {} ({}) · {} from local store · {} files linked in {:.2}s",
+            green("fetched"),
+            fetched_count,
+            crate::util::human(fetched_bytes),
+            tree.packages.len() as u64 - fetched_count,
+            linked_files,
+            mat_secs
+        );
+    }
     // mirror-staleness fix: the tarball's package.json is the authoritative
     // description (a proxy's cached packument can be stale); refresh the
     // meta-cache on drift, one dim note when something actually changed
     let refreshed = refresh_descriptions(root, &tree);
-    if !refreshed.is_empty() {
+    if !json && !refreshed.is_empty() {
         println!(
             "  {} refreshed cached description for {}",
             dim("note:"),
@@ -402,12 +475,14 @@ pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, S
             }
             crate::linker::write_ts_shims(root, &ts_dir, hook.as_deref())
                 .context("writing ts shims")?;
-            println!(
-                "  {} typescript {} ready (tsc/tsserver in .zap/bin, {})",
-                green("ts"),
-                ts_id.rsplit_once('@').map(|x| x.1).unwrap_or(""),
-                if managed { "zap-managed" } else { "user-managed" }
-            );
+            if !json {
+                println!(
+                    "  {} typescript {} ready (tsc/tsserver in .zap/bin, {})",
+                    green("ts"),
+                    ts_id.rsplit_once('@').map(|x| x.1).unwrap_or(""),
+                    if managed { "zap-managed" } else { "user-managed" }
+                );
+            }
         }
     }
     if cfg.lifecycle {
@@ -416,14 +491,18 @@ pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, S
         // dep scripts are allowlist-gated (.zap-allow.json); the root's own
         // are trusted user code, gated by `lifecycle: true` alone
         let allow = crate::allow::load(root)?;
-        let mut ran = run_root_lifecycle(root, &["preinstall"], &cfg);
-        let (dep_ran, blocked) = run_lifecycle(root, &tree, &allow, &cfg);
+        let mut ran = run_root_lifecycle(root, &["preinstall"], &cfg, json);
+        let (dep_ran, blocked) = run_lifecycle(root, &tree, &allow, &cfg, json);
         ran += dep_ran;
-        ran += run_root_lifecycle(root, &["install", "postinstall"], &cfg);
-        if ran > 0 {
+        ran += run_root_lifecycle(root, &["install", "postinstall"], &cfg, json);
+        report.lifecycle = LifecycleStats {
+            ran: ran as u32,
+            blocked: blocked as u32,
+        };
+        if !json && ran > 0 {
             println!("  {} {} lifecycle scripts", green("ran"), ran);
         }
-        if blocked > 0 {
+        if !json && blocked > 0 {
             println!(
                 "  {} {} package{} lifecycle scripts but {} not allowlisted, {} to review",
                 yellow("note:"),
@@ -435,16 +514,72 @@ pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, S
         }
     }
 
-    let total = tree.packages.len();
-    let secs = started.elapsed().as_secs_f64();
-    println!(
-        "{} {} packages in {:.2}s ({})",
-        green("done"),
-        total,
-        secs,
-        if cfg.linker == Linker::Pnp { "pnp" } else { "node-modules" }
-    );
-    Ok(0)
+    report.done_packages = tree.packages.len();
+    report.seconds = started.elapsed().as_secs_f64();
+    if !json {
+        println!(
+            "{} {} packages in {:.2}s ({})",
+            green("done"),
+            tree.packages.len(),
+            report.seconds,
+            if cfg.linker == Linker::Pnp { "pnp" } else { "node-modules" }
+        );
+    }
+    // tree-level delta vs the previous lockfile (the manifest edits live in
+    // the caller's own output; the doc carries what's in the tree now)
+    let (added, removed, changed) = lock_diff(prev_lock.as_ref(), &tree, &deps, &dev, &member_reqs);
+    report.added = added;
+    report.removed = removed;
+    report.changed = changed;
+    Ok((0, report))
+}
+
+/// the previous-vs-new tree delta: added ids with the manifest section that
+/// pulls them in, removed ids, and same-name version changes
+fn lock_diff(
+    prev: Option<&crate::model::Lockfile>,
+    tree: &Tree,
+    deps: &BTreeMap<String, String>,
+    dev: &BTreeMap<String, String>,
+    member_reqs: &[BTreeMap<String, String>],
+) -> (Vec<(String, String)>, Vec<String>, Vec<(String, String, String)>) {
+    let prev_versions: BTreeMap<String, String> = prev
+        .map(|l| {
+            Tree::from(l)
+                .packages
+                .keys()
+                .filter_map(|id| id.rsplit_once('@').map(|x| (x.0.to_string(), x.1.to_string())))
+                .collect()
+        })
+        .unwrap_or_default();
+    let section_of = |name: &str| {
+        if deps.contains_key(name) {
+            "dependencies"
+        } else if dev.contains_key(name) {
+            "devDependencies"
+        } else if member_reqs.iter().any(|m| m.contains_key(name)) {
+            "workspace"
+        } else {
+            "transitive"
+        }
+    };
+    let mut added = Vec::new();
+    let mut removed = Vec::new();
+    let mut changed = Vec::new();
+    for id in tree.packages.keys() {
+        let Some((name, ver)) = id.rsplit_once('@') else { continue };
+        match prev_versions.get(name) {
+            None => added.push((id.clone(), section_of(name).to_string())),
+            Some(old) if old != ver => changed.push((id.clone(), old.clone(), ver.to_string())),
+            _ => {}
+        }
+    }
+    for (name, ver) in &prev_versions {
+        if !tree.packages.keys().any(|id| id.rsplit_once('@').map(|x| x.0 == name).unwrap_or(false)) {
+            removed.push(format!("{name}@{ver}"));
+        }
+    }
+    (added, removed, changed)
 }
 
 /// download missing packages into the global store, then hardlink everything into .zap/v
@@ -594,7 +729,7 @@ async fn link_all(
 /// opt-in dependency lifecycle scripts (config: `lifecycle: true`), gated by
 /// the package-hash allowlist, never run by default; returns (ran, blocked)
 /// where blocked counts packages with lifecycle scripts that the gate skipped
-fn run_lifecycle(root: &Path, tree: &Tree, allow: &crate::allow::AllowList, cfg: &Config) -> (usize, usize) {
+fn run_lifecycle(root: &Path, tree: &Tree, allow: &crate::allow::AllowList, cfg: &Config, quiet: bool) -> (usize, usize) {
     let vroot = root.join(".zap").join("v");
     let mut ran = 0usize;
     let mut blocked = 0usize;
@@ -620,7 +755,7 @@ fn run_lifecycle(root: &Path, tree: &Tree, allow: &crate::allow::AllowList, cfg:
             let Some(script) = scripts.get(stage).and_then(|x| x.as_str()) else {
                 continue;
             };
-            if run_lifecycle_stage(root, &dir, id, stage, script, cfg) {
+            if run_lifecycle_stage(root, &dir, id, stage, script, cfg, quiet) {
                 ran += 1;
             }
         }
@@ -629,7 +764,7 @@ fn run_lifecycle(root: &Path, tree: &Tree, allow: &crate::allow::AllowList, cfg:
 }
 
 /// the root project's own install lifecycle hooks, same opt-in gate as deps
-fn run_root_lifecycle(root: &Path, stages: &[&str], cfg: &Config) -> usize {
+fn run_root_lifecycle(root: &Path, stages: &[&str], cfg: &Config, quiet: bool) -> usize {
     let Ok(v) = crate::util::read_json(&root.join("package.json")) else {
         return 0;
     };
@@ -639,7 +774,7 @@ fn run_root_lifecycle(root: &Path, stages: &[&str], cfg: &Config) -> usize {
     let mut ran = 0usize;
     for stage in stages {
         if let Some(script) = scripts.get(*stage).and_then(|x| x.as_str()) {
-            if run_lifecycle_stage(root, root, "root", stage, script, cfg) {
+            if run_lifecycle_stage(root, root, "root", stage, script, cfg, quiet) {
                 ran += 1;
             }
         }
@@ -648,28 +783,51 @@ fn run_root_lifecycle(root: &Path, stages: &[&str], cfg: &Config) -> usize {
 }
 
 /// run one lifecycle stage in `dir`, npm env vars set; `what` names the owner
-/// in warnings ("root" or the package id)
-fn run_lifecycle_stage(root: &Path, dir: &Path, what: &str, stage: &str, script: &str, cfg: &Config) -> bool {
+/// in warnings ("root" or the package id). quiet (json mode) captures the
+/// output instead of inheriting stdio so the document stays alone on stdout
+fn run_lifecycle_stage(root: &Path, dir: &Path, what: &str, stage: &str, script: &str, cfg: &Config, quiet: bool) -> bool {
     let mut c = crate::util::shell_command(script);
     c.current_dir(dir);
     crate::pnp::apply_env(&mut c, root, cfg.linker);
     c.env("npm_lifecycle_event", stage);
     c.env("INIT_CWD", dir.to_string_lossy().to_string());
-    let ok = match c.status() {
-        Ok(s) if s.success() => true,
-        Ok(s) => {
-            eprintln!(
-                "{} lifecycle `{}` in {} exited with {}",
-                yellow("warning:"),
-                stage,
-                what,
-                s.code().unwrap_or(1)
-            );
-            false
+    let ok = if quiet {
+        match c.output() {
+            Ok(o) if o.status.success() => true,
+            Ok(o) => {
+                let err = String::from_utf8_lossy(&o.stderr);
+                eprintln!(
+                    "{} lifecycle `{}` in {} exited with {}{}",
+                    yellow("warning:"),
+                    stage,
+                    what,
+                    o.status.code().unwrap_or(1),
+                    if err.trim().is_empty() { String::new() } else { format!(": {}", err.trim()) }
+                );
+                false
+            }
+            Err(e) => {
+                eprintln!("{} lifecycle `{}` in {} failed: {}", yellow("warning:"), stage, what, e);
+                false
+            }
         }
-        Err(e) => {
-            eprintln!("{} lifecycle `{}` in {} failed: {}", yellow("warning:"), stage, what, e);
-            false
+    } else {
+        match c.status() {
+            Ok(s) if s.success() => true,
+            Ok(s) => {
+                eprintln!(
+                    "{} lifecycle `{}` in {} exited with {}",
+                    yellow("warning:"),
+                    stage,
+                    what,
+                    s.code().unwrap_or(1)
+                );
+                false
+            }
+            Err(e) => {
+                eprintln!("{} lifecycle `{}` in {} failed: {}", yellow("warning:"), stage, what, e);
+                false
+            }
         }
     };
     ok
@@ -1703,6 +1861,69 @@ mod tests {
         assert!(out.contains("staledesc@1.0.0"), "header: {}", out);
         assert!(out.contains("- ") && out.contains("the real words"), "refreshed description: {}", out);
         std::env::remove_var("ZAP_HOME");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&proj);
+    }
+
+    // install report (the json mode's document, collected via install_in_core)
+
+    #[test]
+    fn install_report_tracks_the_tree_delta() {
+        let _env = crate::cmds::env_test_lock();
+        let (home, proj) = offline_setup(&[("ms", "2.1.3"), ("left-pad", "1.3.0")]);
+        std::fs::write(proj.join(".zaprc.yaml"), "linker: node-modules\n").unwrap();
+        manifest_write(&proj, &[("ms", "^2.0.0")]);
+
+        // first install: ms enters the tree from nothing
+        let (_, r1) = install_in_core(&proj, &[], None, false).unwrap();
+        assert_eq!(r1.added, vec![("ms@2.1.3".to_string(), "dependencies".to_string())]);
+        assert!(r1.removed.is_empty() && r1.changed.is_empty());
+        assert_eq!(r1.fetched.count, 0, "store-seeded: nothing fetched");
+        assert_eq!(r1.fetched.from_store, 1);
+        assert!(r1.linked_files > 0, "link_all's exact count carried");
+        assert_eq!(r1.done_packages, 1);
+
+        // hand-add left-pad: the second report sees only the new id
+        manifest_write(&proj, &[("ms", "^2.0.0"), ("left-pad", "^1.0.0")]);
+        let (_, r2) = install_in_core(&proj, &[], None, false).unwrap();
+        assert_eq!(r2.added, vec![("left-pad@1.3.0".to_string(), "dependencies".to_string())]);
+        assert_eq!(r2.fetched.count, 0);
+        assert_eq!(r2.fetched.from_store, 2);
+        assert_eq!(r2.done_packages, 2);
+
+        // hand-remove left-pad: the removal lands in the report
+        manifest_write(&proj, &[("ms", "^2.0.0")]);
+        let (_, r3) = install_in_core(&proj, &[], None, false).unwrap();
+        assert_eq!(r3.removed, vec!["left-pad@1.3.0".to_string()]);
+        assert!(r3.added.is_empty() && r3.changed.is_empty());
+        assert_eq!(r3.done_packages, 1);
+
+        // no-op install: empty delta, tree intact
+        let (_, r4) = install_in_core(&proj, &[], None, false).unwrap();
+        assert!(r4.added.is_empty() && r4.removed.is_empty() && r4.changed.is_empty());
+        assert_eq!(r4.done_packages, 1);
+        assert_eq!(r4.lifecycle.ran, 0, "lifecycle not enabled in this fixture");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&proj);
+    }
+
+    #[test]
+    fn install_json_mode_prints_only_the_document() {
+        // the json flag inside install_in: the doc must be the ONLY stdout
+        let _env = crate::cmds::env_test_lock();
+        let (home, proj) = offline_setup(&[("ms", "2.1.3")]);
+        std::fs::write(proj.join(".zaprc.yaml"), "linker: node-modules\n").unwrap();
+        manifest_write(&proj, &[("ms", "^2.0.0")]);
+        // main.rs's heading suppression isn't part of install_in; run() paths
+        // get it there. here the core is called directly with the flag
+        let code = install_in(&proj, &["--json".to_string()], None).unwrap();
+        assert_eq!(code, 0);
+        // report fields parse back out of a freshly built doc
+        let (_, report) = install_in_core(&proj, &["--json".to_string()], None, true).unwrap();
+        let doc = serde_json::to_value(&report).unwrap();
+        assert!(doc["donePackages"].as_u64().is_some(), "camelCase doc: {}", doc);
+        assert!(doc["fetched"]["fromStore"].as_u64().is_some());
+        assert!(doc["lifecycle"]["ran"].as_u64().is_some());
         let _ = std::fs::remove_dir_all(&home);
         let _ = std::fs::remove_dir_all(&proj);
     }

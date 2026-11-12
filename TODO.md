@@ -36,14 +36,14 @@
 - [x] `@zappkg/api` proper api: src/api_spec.rs (declarative flag/positional/return table for every command) → build.rs generates jsdoc'd Options + argv builders + the ZapApi interface (api.gen.ts, content-compare); spec typos fail the tests, missing entries fail the build, flags can't drift from the real surface
 - [x] `zap inspect <pkg>[@version]`: registry-metadata inspection (deps/optional/peers/description/release history), works outside projects, meta-cached; installed tarballs refresh stale cached descriptions (mirror-staleness fix)
 - [x] `--json` machine output on the read commands: `ls`/`why`/`view`/`outdated` emit structured documents (heading suppressed under the flag); `@zappkg/api`'s wrappers parse them into typed data; native crate deleted, the shell-out layer IS the api
+- [x] zap installer
+- [x] `--json` result objects for the mutating commands: `install`/`add`/`remove`/`ci` emit an install report (tree delta added/removed/changed + fetch/link/lifecycle/platform/peer stats; human output byte-stable); `@zappkg/api`'s methods return it as typed `InstallJson`; migrate still human-only (special-cased conversion flow)
 
 ## successful runs
 - [x] first real CI run on github (verifies macos + publishes artifacts)
 
 ## next up
-- [ ] `--json` result objects for the mutating commands (install/add/remove)
 - [ ] colour and make the terminal more fun? [in-progress]
-- [ ] zap installer [in-progress, npm-ified version done, awaiting command line installer from curl version]
 - [ ] "zap console" a tui for using zap for essentially an entire command window, only usable in non-cicd environments
 - [ ] zap multi-run commands need a input system per-terminal, so commands that need inputs can be used
 

@@ -8,15 +8,16 @@ use crate::workspace::install_root_for;
 
 pub const NAME: &str = "remove";
 pub const ALIASES: &[&str] = &["rm", "uninstall"];
-pub const USAGE: &str = "remove dependencies (-g for global installs)";
+pub const USAGE: &str = "remove dependencies (-g for global installs, --json)";
 pub const ABOUT: &str = "drops named deps from package.json (dev deps from their own section),
 unlinks them from the tree and re-installs. -g removes global installs: the
-package dir under ~/.zap/global and its shims in ~/.zap/bin. aliases: rm,
-uninstall.";
+package dir under ~/.zap/global and its shims in ~/.zap/bin. --json
+suppresses the human output and prints the install report document instead.
+aliases: rm, uninstall.";
 pub const EXAMPLE: &str = "  $ zap remove chalk
   remove chalk from the manifest and prune the tree
-  $ zap remove -g typescript
-  drop the global typescript install and its tsc shim";
+  $ zap remove chalk --json
+  the install report as a json document, for tools";
 
 pub fn run(args: &[String]) -> Result<i32> {
     let global = args.iter().any(|a| a == "--global" || a == "-g");
@@ -47,6 +48,13 @@ pub fn run(args: &[String]) -> Result<i32> {
         bail!("`{}` not found in dependencies", names.join(", "));
     }
     std::fs::write(&pkg_path, format!("{}\n", serde_json::to_string_pretty(&v)?))?;
-    println!("{} {}", green("removed"), names.join(", "));
-    install_in(&install_root, &[], None)
+    let json = args.iter().any(|a| a == "--json");
+    if !json {
+        println!("{} {}", green("removed"), names.join(", "));
+    }
+    let mut iargs: Vec<String> = Vec::new();
+    if json {
+        iargs.push("--json".to_string());
+    }
+    install_in(&install_root, &iargs, None)
 }

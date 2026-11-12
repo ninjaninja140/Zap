@@ -10,16 +10,17 @@ use crate::workspace::install_root_for;
 
 pub const NAME: &str = "add";
 pub const ALIASES: &[&str] = &["a"];
-pub const USAGE: &str = "add dependencies (supports --dev, -g global; workspace deps auto-link)";
+pub const USAGE: &str = "add dependencies (supports --dev, -g global; workspace deps auto-link; --json)";
 pub const ABOUT: &str = "adds deps to package.json and installs them in the same pass. specs are
 `name`, `name@range` or `name@latest`; packages that are workspace members
 link as `workspace:*`. --dev (or -D) records into devDependencies. -g
 (--global) installs into ~/.zap/global with the bins shimmed into ~/.zap/bin,
-no project needed.";
+no project needed. --json suppresses the human output and prints the install
+report document instead.";
 pub const EXAMPLE: &str = "  $ zap add chalk --dev
   add chalk to devDependencies and install it
-  $ zap add -g typescript
-  install typescript globally, tsc shimmed for PATH-wide use";
+  $ zap add is-odd --json
+  the install report as a json document, for tools";
 
 pub fn run(args: &[String]) -> Result<i32> {
     let is_dev = args.iter().any(|a| a == "--dev" || a == "-D");
@@ -94,6 +95,7 @@ pub fn run(args: &[String]) -> Result<i32> {
     let key = if is_dev { "devDependencies" } else { "dependencies" };
     let deps = obj.entry(key.to_string()).or_insert_with(|| serde_json::json!({}));
     let dmap = deps.as_object_mut().ok_or_else(|| anyhow!("{} must be an object", key))?;
+    let json = args.iter().any(|a| a == "--json");
     for (name, ver) in &picks {
         let range = if member_names.contains(name) {
             "workspace:*".to_string()
@@ -103,8 +105,14 @@ pub fn run(args: &[String]) -> Result<i32> {
             format!("^{}", ver)
         };
         dmap.insert(name.clone(), serde_json::json!(range));
-        println!("{} {}@{}", green("+"), name, range);
+        if !json {
+            println!("{} {}@{}", green("+"), name, range);
+        }
     }
     std::fs::write(&pkg_path, format!("{}\n", serde_json::to_string_pretty(&v)?))?;
-    install_in(&install_root, &[], None)
+    let mut iargs: Vec<String> = Vec::new();
+    if json {
+        iargs.push("--json".to_string());
+    }
+    install_in(&install_root, &iargs, None)
 }
