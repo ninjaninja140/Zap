@@ -25,6 +25,39 @@ pub fn root_hash(
     crate::util::sha256_hex(payload.to_string().as_bytes())
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::collections::BTreeMap;
+
+    #[test]
+    fn root_hash_detects_manifest_drift() {
+        let deps = BTreeMap::from([("ms".to_string(), "^2.0.0".to_string())]);
+        let dev = BTreeMap::new();
+        let members = vec![];
+        let base = root_hash(&deps, &dev, &members);
+        // unchanged manifest: same hash (the cached-tree skip)
+        assert_eq!(root_hash(&deps, &dev, &members), base);
+        // hand-added root dep: drift
+        let more = BTreeMap::from([
+            ("ms".to_string(), "^2.0.0".to_string()),
+            ("chalk".to_string(), "^4.0.0".to_string()),
+        ]);
+        assert_ne!(root_hash(&more, &dev, &members), base);
+        // hand-removed root dep: drift
+        assert_ne!(root_hash(&BTreeMap::new(), &dev, &members), base);
+        // a workspace member's dep change: drift too
+        let mdeps = BTreeMap::from([("ms".to_string(), "^1.0.0".to_string())]);
+        let empty2 = BTreeMap::new();
+        let with_member = vec![("w".to_string(), &mdeps, &empty2)];
+        assert_ne!(root_hash(&deps, &dev, &with_member), base);
+        // a member added: drift
+        let empty3 = BTreeMap::new();
+        let with_new_member = vec![("w2".to_string(), &empty3, &empty3)];
+        assert_ne!(root_hash(&deps, &dev, &with_new_member), base);
+    }
+}
+
 pub fn read(lock_path: &Path) -> Result<Option<Lockfile>> {
     if !lock_path.is_file() {
         return Ok(None);

@@ -1,0 +1,8 @@
+#!/usr/bin/env sh
+# zap dev shim (linux/mac): repo build first, then the verify-linux copy
+d="."
+for z in "$d/../../target/debug/zap" "$d/../../target/release/zap" "$HOME/zap-verify/target/release/zap"; do
+    if [ -x "$z" ]; then exec "$z" "$@"; fi
+done
+echo "zap shim: no binary found (cargo build, or run scripts/verify-linux.sh)" >&2
+exit 1

@@ -163,6 +163,9 @@ pub fn write_shim(
 /// write .zap/bin shims for every installed package's bins
 pub fn write_shims(root: &Path, tree: &Tree, hook: Option<&str>) -> Result<()> {
     let bin_dir = root.join(".zap").join("bin");
+    // regenerate from scratch: shims of removed packages must not linger
+    // (the ts shims are written after this by the caller)
+    let _ = std::fs::remove_dir_all(&bin_dir);
     std::fs::create_dir_all(&bin_dir)?;
     let registry = root.join(".zap").join("v");
     for (id, pkg) in &tree.packages {

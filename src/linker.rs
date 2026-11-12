@@ -63,7 +63,15 @@ pub fn link_node_modules(root: &Path, tree: &Tree) -> Result<()> {
         }
     }
 
-    reconcile(root, &links)?;
+    // the managed junction farm + where zap-made links may legally point:
+    // the reconcile pass prunes both manifest-lost links and disk strays
+    let mut nm_dirs: Vec<PathBuf> = vec![root.join("node_modules")];
+    let mut zap_prefixes: Vec<PathBuf> = vec![vroot.clone()];
+    for m in &tree.members {
+        nm_dirs.push(root.join(&m.dir).join("node_modules"));
+        zap_prefixes.push(root.join(&m.dir));
+    }
+    reconcile(root, &links, &nm_dirs, &zap_prefixes)?;
 
     // node_modules/.bin shims for everything reachable from a direct dep
     write_dot_bin(root, tree)?;
@@ -71,9 +79,16 @@ pub fn link_node_modules(root: &Path, tree: &Tree) -> Result<()> {
     Ok(())
 }
 
-/// remove junctions we created last run that are gone from the current plan,
-/// then create all current junctions. never touches real directories.
-fn reconcile(root: &Path, links: &[(PathBuf, PathBuf)]) -> Result<()> {
+/// remove junctions we created last run that are gone from the current plan
+/// (tracked in .zap/nm-paths.json), plus stray zap-made links found on disk
+/// when that manifest was lost, then create all current junctions. never
+/// touches real directories.
+fn reconcile(
+    root: &Path,
+    links: &[(PathBuf, PathBuf)],
+    nm_dirs: &[PathBuf],
+    zap_prefixes: &[PathBuf],
+) -> Result<()> {
     let manifest = root.join(NM_MANIFEST);
     let previous: Vec<String> = std::fs::read_to_string(&manifest)
         .ok()
@@ -84,8 +99,18 @@ fn reconcile(root: &Path, links: &[(PathBuf, PathBuf)]) -> Result<()> {
     for p in &previous {
         let path = PathBuf::from(p);
         if !current.contains(p) && std::fs::read_link(&path).is_ok() {
-            let _ = std::fs::remove_dir(path); // removes the link, never the target
+            remove_link(&path); // removes the link, never the target
         }
+    }
+    // supplement the manifest: a hand-deleted .zap/nm-paths.json loses the
+    // record of last run's links, so scan the managed dirs for zap-made
+    // links (targets under zap's farm/paths) the plan no longer wants
+    let mut strays: Vec<PathBuf> = Vec::new();
+    for dir in nm_dirs {
+        scan_strays(dir, zap_prefixes, &current, &mut strays);
+    }
+    for p in strays {
+        remove_link(&p); // the link itself, never its target
     }
     for (link, target) in links {
         ensure_junction(link, target)?;
@@ -95,11 +120,62 @@ fn reconcile(root: &Path, links: &[(PathBuf, PathBuf)]) -> Result<()> {
     Ok(())
 }
 
+/// walk one managed node_modules dir collecting links whose target points
+/// into zap's own paths but which the current plan dropped; real dirs and
+/// foreign links (npm workspace links etc.) are left alone. scopes get one
+/// nested level (node_modules/@scope/name)
+fn scan_strays(
+    dir: &Path,
+    zap_prefixes: &[PathBuf],
+    current: &std::collections::HashSet<String>,
+    out: &mut Vec<PathBuf>,
+) {
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for entry in rd.flatten() {
+        let path = entry.path();
+        // symlink_metadata never follows the link; junctions count as symlinks
+        let Ok(meta) = std::fs::symlink_metadata(&path) else { continue };
+        let ft = meta.file_type();
+        if !ft.is_symlink() {
+            // a scope dir: the junctions live one level down
+            if ft.is_dir()
+                && path
+                    .file_name()
+                    .map(|n| n.to_string_lossy().starts_with('@'))
+                    .unwrap_or(false)
+            {
+                scan_strays(&path, zap_prefixes, current, out);
+            }
+            continue;
+        }
+        if current.contains(&path.to_string_lossy().to_string()) {
+            continue; // the plan still wants it
+        }
+        let target = std::fs::read_link(&path).unwrap_or_else(|_| path.clone());
+        if zap_prefixes.iter().any(|p| target.starts_with(p)) {
+            out.push(path);
+        }
+    }
+}
+
+/// remove a link without following it: windows junctions are directory
+/// reparse points (remove_dir removes the link itself), unix dir-symlinks
+/// are files (remove_file/unlinks; remove_dir would target the real dir)
+fn remove_link(path: &Path) {
+    let _ = std::fs::remove_file(path);
+    if std::fs::symlink_metadata(path)
+        .map(|m| m.file_type().is_symlink())
+        .unwrap_or(false)
+    {
+        let _ = std::fs::remove_dir(path);
+    }
+}
+
 /// junctions on windows, symlinks elsewhere, never touches real directories
 fn ensure_junction(link: &Path, target: &Path) -> Result<()> {
     if std::fs::read_link(link).is_ok() {
         // stale link of ours: replace it
-        let _ = std::fs::remove_dir(link);
+        remove_link(link);
     } else if link.is_dir() {
         // a real directory the user owns, leave it alone
         return Ok(());
@@ -224,6 +300,57 @@ pub fn link_typecheck_dir(root: &Path, tree: &Tree) -> Result<PathBuf> {
         ensure_junction(link, target)?;
     }
     Ok(dir)
+}
+
+#[cfg(all(test, windows))]
+mod tests {
+    use super::*;
+
+    /// reconcile must prune zap-made junctions that the plan dropped, even
+    /// when .zap/nm-paths.json was lost, and leave real dirs + foreign
+    /// links alone. junctions via mklink /J (no privileges needed)
+    #[test]
+    fn reconcile_prunes_strays_but_keeps_the_plan_and_foreign_links() {
+        let dir = std::env::temp_dir().join(format!("zap-reconcile-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        let vroot = dir.join(".zap").join("v");
+        let nm = dir.join("node_modules");
+        std::fs::create_dir_all(vroot.join("ms@2.1.3")).unwrap();
+        std::fs::create_dir_all(vroot.join("chalk@4.1.2")).unwrap();
+        std::fs::create_dir_all(dir.join("elsewhere")).unwrap();
+        std::fs::create_dir_all(nm.join("real-dir")).unwrap();
+        std::fs::write(nm.join("real-dir").join("f.txt"), "user data").unwrap();
+        let mk = |link: &Path, target: &Path| {
+            let out = Command::new("cmd")
+                .args(["/c", "mklink", "/J"])
+                .arg(link.to_string_lossy().replace('/', "\\").as_str())
+                .arg(target.to_string_lossy().replace('/', "\\").as_str())
+                .output()
+                .unwrap();
+            assert!(out.status.success(), "mklink failed: {}", String::from_utf8_lossy(&out.stderr));
+        };
+        mk(&nm.join("ms"), &vroot.join("ms@2.1.3")); // in the plan
+        mk(&nm.join("chalk"), &vroot.join("chalk@4.1.2")); // stale: not in the plan
+        mk(&nm.join("foreign"), &dir.join("elsewhere")); // zap-prefix miss: kept
+        std::fs::create_dir_all(dir.join("elsewhere")).unwrap();
+
+        // the plan wants only ms; prefixes = the zap vroot
+        let links = vec![(nm.join("ms"), vroot.join("ms@2.1.3"))];
+        let prefixes = vec![vroot.clone()];
+        reconcile(&dir, &links, &[nm.clone()], &prefixes).unwrap();
+
+        assert!(nm.join("ms").exists(), "planned link survives");
+        assert!(!nm.join("chalk").exists(), "stray zap link pruned");
+        assert!(nm.join("foreign").exists(), "foreign link untouched");
+        assert!(nm.join("real-dir").join("f.txt").is_file(), "real dir untouched");
+        // the pruned junction's TARGET is untouched
+        assert!(vroot.join("chalk@4.1.2").is_dir(), "junction removal never follows");
+        // the manifest now records the plan for next run's previous-prune
+        let saved: Vec<String> =
+            serde_json::from_str(&std::fs::read_to_string(dir.join(NM_MANIFEST)).unwrap()).unwrap();
+        assert_eq!(saved, vec![nm.join("ms").to_string_lossy().to_string()]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }
 
 /// .zap/bin shims for the typescript toolchain with type resolution wired in

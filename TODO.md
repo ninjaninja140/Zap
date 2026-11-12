@@ -28,6 +28,8 @@
 - [x] lifecycle scripts sandboxing (allowlist by package hash)
 - [x] `zap outdated` interactive upgrade mode (yarn upgrade-interactive style)
 - [x] interactive upgrade targets: `-i` picker rows choose keep → latest-of-current-major → absolute latest (left/right cycles, table columns Package|Current|Latest Major|Latest); major bumps write `^<latest-major>` reusing add's manifest-write pattern
+- [x] global installs: `zap add -g` (isolated per-package pnp project under `~/.zap/global/<name>`, bins shimmed into `~/.zap/bin` with pnp hooks, `zap remove -g`/`zap ls -g`), no project context needed
+- [x] `zap dlx` / `zap x` remote fallback work outside any project (npx-style; local-first bin lookup stays project-aware when one exists)
 - [x] `zap upgrade --interactive`: with package names, a per-package exact-version picker (all registry versions, newest first, prereleases dim but selectable, buffered picks, one install pass); without names, opens the all-packages three-target upgrader; bare `zap upgrade` unchanged
 - [x] `zap version` for real (currently an honest not-implemented stub): major|minor|patch|x.y.z bumps + git tag + changelog generation
 

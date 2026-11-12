@@ -22,6 +22,12 @@ pub fn dim(s: impl AsRef<str>) -> String {
 pub fn electric(s: impl AsRef<str>) -> String {
     format!("\x1b[38;2;49;86;255m{}\x1b[0m", s.as_ref())
 }
+
+/// the lanes' electric green (RGB 0, 230, 118, vivid, reads as "good")
+/// against the blue brand bar below them
+pub fn electric_green(s: impl AsRef<str>) -> String {
+    format!("\x1b[38;2;0;230;118m{}\x1b[0m", s.as_ref())
+}
 pub fn bold(s: impl AsRef<str>) -> String {
     format!("\x1b[1m{}\x1b[0m", s.as_ref())
 }

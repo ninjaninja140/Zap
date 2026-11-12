@@ -5,6 +5,9 @@
 mod _shared;
 pub use _shared::*;
 
+#[path = "_progress.rs"]
+pub mod progress;
+
 mod gen;
 
 // hoist the generated group modules + registry to cmds level
@@ -32,7 +35,7 @@ pub const GROUP_INFO: &[(&str, &str)] = &[
     ("install", "project setup + dependency management"),
     ("run", "scripts, executables and the ts compiler"),
     ("info", "inspecting and auditing the dependency tree"),
-    ("publish", "npm registry protocol — pack, publish, auth"),
+    ("publish", "npm registry protocol, pack, publish, auth"),
     ("setup", "config, migration and AI-injection"),
 ];
 

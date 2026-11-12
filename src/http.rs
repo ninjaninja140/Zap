@@ -5,6 +5,11 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use crate::model::Packument;
 
+/// download progress hook: (bytes done, total from content-length; None when
+/// the server sent none). plain std fn trait so low-level crates stay free of
+/// any ui dependency
+pub type DownloadHook<'a> = &'a (dyn Fn(u64, Option<u64>) + Send + Sync);
+
 #[derive(Clone)]
 pub struct Registry {
     client: reqwest::Client,
@@ -117,7 +122,9 @@ impl Registry {
         Ok(Some(Arc::new(pack)))
     }
 
-    pub async fn tarball(&self, url: &str) -> Result<Vec<u8>> {
+    /// fetch one tarball fully; `hook` fires per chunk so a progress lane can
+    /// track the transfer as it happens (chunk loop instead of one .bytes())
+    pub async fn tarball(&self, url: &str, hook: Option<DownloadHook<'_>>) -> Result<Vec<u8>> {
         let resp = self
             .client
             .get(url)
@@ -126,8 +133,20 @@ impl Registry {
             .with_context(|| format!("failed to download {}", url))?
             .error_for_status()
             .with_context(|| format!("download failed for {}", url))?;
-        let bytes = resp.bytes().await?;
-        Ok(bytes.to_vec())
+        // content-length covers the ENCODED body: with the gzip feature the
+        // decoded chunks can sum past it, lanes clamp
+        let total = resp.content_length();
+        let mut done: u64 = 0;
+        let mut data: Vec<u8> = Vec::with_capacity(total.unwrap_or(0) as usize);
+        let mut resp = resp;
+        while let Some(chunk) = resp.chunk().await.with_context(|| format!("reading {}", url))? {
+            done += chunk.len() as u64;
+            data.extend_from_slice(&chunk);
+            if let Some(hook) = hook {
+                hook(done, total);
+            }
+        }
+        Ok(data)
     }
 }
 

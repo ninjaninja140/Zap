@@ -8,13 +8,22 @@ use crate::workspace::install_root_for;
 
 pub const NAME: &str = "remove";
 pub const ALIASES: &[&str] = &["rm", "uninstall"];
-pub const USAGE: &str = "remove dependencies";
+pub const USAGE: &str = "remove dependencies (-g for global installs)";
 pub const ABOUT: &str = "drops named deps from package.json (dev deps from their own section),
-unlinks them from the tree and re-installs. aliases: rm, uninstall.";
+unlinks them from the tree and re-installs. -g removes global installs: the
+package dir under ~/.zap/global and its shims in ~/.zap/bin. aliases: rm,
+uninstall.";
 pub const EXAMPLE: &str = "  $ zap remove chalk
-  remove chalk from the manifest and prune the tree";
+  remove chalk from the manifest and prune the tree
+  $ zap remove -g typescript
+  drop the global typescript install and its tsc shim";
 
 pub fn run(args: &[String]) -> Result<i32> {
+    let global = args.iter().any(|a| a == "--global" || a == "-g");
+    if global {
+        // global removal never touches a project manifest
+        return crate::cmds::global_remove(args);
+    }
     let names: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();
     if names.is_empty() {
         bail!("usage: zap remove <package> ...");

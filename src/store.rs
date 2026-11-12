@@ -8,14 +8,21 @@ pub fn store_pkg_dir(id: &str) -> Result<PathBuf> {
 }
 
 /// make sure the package is extracted in the global store; download + verify if missing.
-/// returns (store path, bytes downloaded, 0 when already cached).
-pub async fn ensure_in_store(reg: &crate::http::Registry, id: &str, pkg: &LockPackage) -> Result<(PathBuf, u64)> {
+/// returns (store path, bytes downloaded, 0 when already cached). `hook`
+/// receives (done, total) per downloaded chunk for progress lanes; None
+/// keeps the plain fire-and-forget behavior
+pub async fn ensure_in_store(
+    reg: &crate::http::Registry,
+    id: &str,
+    pkg: &LockPackage,
+    hook: Option<crate::http::DownloadHook<'_>>,
+) -> Result<(PathBuf, u64)> {
     let dir = store_pkg_dir(id)?;
     if dir.join(".zap-ok").exists() {
         return Ok((dir, 0));
     }
     let data = reg
-        .tarball(&pkg.tarball)
+        .tarball(&pkg.tarball, hook)
         .await
         .with_context(|| format!("downloading {}", pkg.tarball))?;
     if !pkg.integrity.is_empty() && !crate::util::verify_integrity(&data, &pkg.integrity) {

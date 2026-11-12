@@ -11,6 +11,168 @@ use crate::model::{LockMember, LockPackage, Lockfile, Tree};
 use crate::util::{cyan, dim, green, yellow};
 use crate::workspace::{install_root_for, Member};
 
+// global installs: one isolated project dir per package under ~/.zap/global,
+// its bins shimmed into ~/.zap/bin for PATH-wide use
+
+/// the global area: one tiny isolated project per globally installed package
+pub fn global_root() -> Result<PathBuf> {
+    Ok(crate::util::zap_home()?.join("global"))
+}
+
+/// the shared user-level shim dir for global package bins (~/.zap/bin)
+pub fn global_bin_dir() -> Result<PathBuf> {
+    Ok(crate::util::zap_home()?.join("bin"))
+}
+
+/// `zap add -g <pkg>[@range]...`: write an isolated manifest per package and
+/// run the normal install machinery on it, no cross-package version
+/// conflicts, ever. the package's bins shim into ~/.zap/bin (the shims embed
+/// absolute paths + the pnp hook, they work from any cwd). works outside any
+/// project; global dirs use default config on purpose (no rc files in
+/// ~/.zap/global, globals aren't projects)
+pub fn global_add(args: &[String]) -> Result<i32> {
+    let specs: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();
+    if specs.is_empty() {
+        bail!("usage: zap add -g <package>[@range] ...");
+    }
+    let groot = global_root()?;
+    std::fs::create_dir_all(&groot)?;
+    let bin_dir = global_bin_dir()?;
+    std::fs::create_dir_all(&bin_dir)?;
+    let mut new_shims = 0usize;
+    let mut code = 0;
+    for spec in specs {
+        let (name, range) = crate::util::split_spec(&spec);
+        let dir = groot.join(&name);
+        std::fs::create_dir_all(&dir)?;
+        // re-add with a different range = re-install: the manifest rewrite +
+        // re-resolve handles the upgrade; the isolated dir keeps it clean
+        let dep_range = if range.is_empty() { "*" } else { &range };
+        let manifest = serde_json::json!({
+            "name": &name,
+            "version": "0.0.0",
+            "private": true,
+            "dependencies": { &name: dep_range },
+        });
+        std::fs::write(dir.join("package.json"), format!("{}\n", serde_json::to_string_pretty(&manifest)?))?;
+        code = install_in(&dir, &[], None)?;
+        if code != 0 {
+            return Ok(code);
+        }
+        let cfg = Config::load(&dir);
+        let hook = crate::pnp::node_options(&dir, cfg.linker);
+        // the installed package's own bins, from its lock entry
+        let lock = crate::lockfile::read(&dir.join(".zap-lock.json"))?
+            .ok_or_else(|| anyhow!("no lockfile after global install of `{}`", name))?;
+        let own_bins: Vec<(String, String)> = lock
+            .root
+            .get(&name)
+            .and_then(|id| lock.packages.get(id))
+            .map(|p| p.bin.iter().map(|(b, r)| (b.clone(), r.clone())).collect())
+            .unwrap_or_default();
+        if own_bins.is_empty() {
+            println!("{} {} (no bins to shim)", dim("installed"), name);
+            continue;
+        }
+        for (bin_name, rel) in &own_bins {
+            let shim_path = bin_dir.join(crate::pnp::shim_file_name(bin_name));
+            let is_new = !shim_path.exists();
+            if !is_new {
+                // collision: another global owns this bin name, last install wins
+                let old = std::fs::read_to_string(&shim_path).unwrap_or_default();
+                let mine = dir.to_string_lossy().to_string();
+                if !old.contains(&mine) {
+                    println!(
+                        "{} bin {} was already shimmed by another global package, last install wins",
+                        crate::util::yellow("note:"),
+                        bin_name
+                    );
+                }
+            }
+            let bin_file = dir
+                .join(".zap")
+                .join("v")
+                .join(crate::util::pkg_dir_name(lock.root.get(&name).map(|s| s.as_str()).unwrap_or("")))
+                .join(rel.trim_start_matches("./"));
+            crate::pnp::write_shim(&bin_dir, bin_name, &bin_file, hook.as_deref(), &[])?;
+            if is_new {
+                new_shims += 1;
+            }
+        }
+        println!("{} {}@{}", green("+"), name, lock.root.get(&name).and_then(|id| id.rsplit_once('@')).map(|x| x.1).unwrap_or("?"));
+    }
+    if new_shims > 0 {
+        println!(
+            "{}",
+            dim(format!(
+                "{} new shim(s) in {}, add it to PATH to use them everywhere",
+                new_shims,
+                bin_dir.display()
+            ))
+        );
+    }
+    Ok(code)
+}
+
+/// `zap remove -g <name>...`: drop the isolated dir + that package's shims
+/// from ~/.zap/bin. the shims embed the package's absolute install path, so
+/// they're identified by a content scan, no shim ledger needed (shortcut:
+/// scan instead of tracking a registry file; ~a dozen files at worst)
+pub fn global_remove(args: &[String]) -> Result<i32> {
+    let names: Vec<String> = args.iter().filter(|a| !a.starts_with('-')).cloned().collect();
+    if names.is_empty() {
+        bail!("usage: zap remove -g <package> ...");
+    }
+    let groot = global_root()?;
+    let bin_dir = global_bin_dir()?;
+    for name in &names {
+        let dir = groot.join(name);
+        if !dir.is_dir() {
+            bail!("`{}` is not installed globally", name);
+        }
+        let prefix = dir.to_string_lossy().to_string();
+        if let Ok(rd) = std::fs::read_dir(&bin_dir) {
+            for entry in rd.flatten() {
+                let p = entry.path();
+                if let Ok(content) = std::fs::read_to_string(&p) {
+                    if content.contains(&prefix) {
+                        let _ = std::fs::remove_file(&p);
+                    }
+                }
+            }
+        }
+        std::fs::remove_dir_all(&dir)?;
+        println!("{} {}", green("-"), name);
+    }
+    Ok(0)
+}
+
+/// `zap ls -g`: globally installed packages with their resolved versions
+pub fn global_ls() -> Result<i32> {
+    let groot = global_root()?;
+    let mut found = 0usize;
+    if let Ok(rd) = std::fs::read_dir(&groot) {
+        for e in rd.flatten() {
+            let dir = e.path();
+            if !dir.is_dir() {
+                continue;
+            }
+            let name = dir.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default();
+            let ver = crate::lockfile::read(&dir.join(".zap-lock.json"))
+                .ok()
+                .flatten()
+                .and_then(|l| l.root.values().next().cloned())
+                .and_then(|id| id.rsplit_once('@').map(|x| x.1.to_string()));
+            println!("  {} {}", name, crate::util::dim(&ver.unwrap_or_else(|| "?".to_string())));
+            found += 1;
+        }
+    }
+    if found == 0 {
+        println!("{}", crate::util::dim("no global packages"));
+    }
+    Ok(0)
+}
+
 // install
 
 pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, String>>) -> Result<i32> {
@@ -21,6 +183,7 @@ pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, S
     let production = args.iter().any(|a| a == "--production" || a == "-P" || a == "--prod" || a == "--omit=dev");
     let cfg = Config::load(root);
     let started = std::time::Instant::now();
+    let progress = Arc::new(crate::cmds::progress::Progress::start(cfg.concurrency.min(8)));
 
     let manifest = crate::util::read_json(&root.join("package.json"))?;
     let (deps, dev) = read_deps_from(&manifest);
@@ -48,8 +211,17 @@ pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, S
         members_raw.iter().map(|m| (m.name.clone(), &m.deps, &m.dev)).collect();
 
     if deps.is_empty() && dev.is_empty() && members.is_empty() {
-        println!("{}", dim("nothing to install (no dependencies)"));
-        return Ok(0);
+        // nothing to install, but when a previous install left state behind
+        // (lockfile, vroot, junctions, pnp artifacts), run the flow anyway so
+        // the removal tears all of it down; the early return is for pristine
+        // script-only projects
+        let has_state = root.join(".zap-lock.json").is_file()
+            || root.join(".zap").is_dir()
+            || root.join("node_modules").exists();
+        if !has_state {
+            println!("{}", dim("nothing to install (no dependencies)"));
+            return Ok(0);
+        }
     }
     let reg = crate::http::Registry::new(
         offline,
@@ -95,12 +267,15 @@ pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, S
             }
         }
     }
+    let mut skipped = 0usize; // platform-mismatched packages the resolve dropped
+    let mut peers: Vec<(String, String, String)> = Vec::new(); // peer-dependency report
     let tree = match cached {
         Some(t) => t,
         None => {
             if frozen {
                 bail!("--frozen-lockfile: manifests changed but the lockfile wasn't updated, run `zap install` locally first");
             }
+            progress.stage("resolving");
     let mut all = deps.clone();
     if !production {
         for (k, v) in &dev {
@@ -109,10 +284,13 @@ pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, S
     }
     let empty = BTreeMap::new();
     let pins_map = pins.unwrap_or(&empty);
-    let (t1, direct_types) =
-        rt.block_on(crate::resolve::resolve(&reg, &all, &mut members, &member_reqs, &empty, &pins_map))?;
+    let (t1, direct_types, sk1, p1) =
+        rt.block_on(crate::resolve::resolve(&reg, &all, &mut members, &member_reqs, &empty, pins_map))?;
+    skipped = sk1;
+    peers = p1;
             if ts_on {
                 // probe @types/<dep> for every direct dep that doesn't ship its own types
+                progress.stage("typescript");
                 let mut type_reqs: BTreeMap<String, String> = BTreeMap::new();
                 for (name, has_own) in &direct_types {
                     if *has_own || name.starts_with("@types/") {
@@ -133,14 +311,16 @@ pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, S
                         cfg.typescript.clone().unwrap_or_else(|| "*".to_string()),
                     );
                 }
-                let (t2, _) = rt.block_on(crate::resolve::resolve(
+                let (t2, _, sk2, p2) = rt.block_on(crate::resolve::resolve(
                     &reg,
                     &all,
                     &mut members,
                     &member_reqs,
                     &type_reqs,
-                    &pins_map,
+                    pins_map,
                 ))?;
+                skipped = sk2;
+                peers = p2;
                 crate::lockfile::write(root, &t2.clone().into_lockfile(hash))?;
                 t2
             } else {
@@ -150,7 +330,40 @@ pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, S
         }
     };
 
-    rt.block_on(materialize(root, &tree, &reg, cfg.concurrency))?;
+    let (fetched_bytes, fetched_count, linked_files, mat_secs) = rt.block_on(materialize(
+        root,
+        &tree,
+        &reg,
+        cfg.concurrency,
+        progress.clone(),
+        Arc::new(direct_set(&tree)),
+    ))?;
+    // the bar clears (thread joined) before any summary line prints
+    progress.finish();
+    if skipped > 0 {
+        let (ho, hc) = crate::resolve::host_platform();
+        println!(
+            "{}",
+            dim(format!("skipped {} platform-mismatched package(s) (host is {}:{})", skipped, ho, hc))
+        );
+    }
+    // peer-dependency advisories: warn + recommend, never auto-install
+    if !peers.is_empty() {
+        let provided: BTreeMap<String, String> =
+            tree.packages.keys().map(|id| (id.clone(), id.rsplit_once('@').map(|x| x.1.to_string()).unwrap_or_default())).collect();
+        for w in crate::resolve::peer_warnings(&peers, &provided) {
+            println!("{}", w);
+        }
+    }
+    println!(
+        "  {} {} ({}) · {} from local store · {} files linked in {:.2}s",
+        green("fetched"),
+        fetched_count,
+        crate::util::human(fetched_bytes),
+        tree.packages.len() as u64 - fetched_count,
+        linked_files,
+        mat_secs
+    );
     match cfg.linker {
         Linker::Pnp => {
             crate::pnp::write_runtime(root, &tree, cfg.strict)?;
@@ -229,7 +442,9 @@ async fn materialize(
     tree: &Tree,
     reg: &crate::http::Registry,
     concurrency: usize,
-) -> Result<(u64, u64, u64)> {
+    progress: Arc<crate::cmds::progress::Progress>,
+    direct: Arc<HashSet<String>>,
+) -> Result<(u64, u64, u64, f64)> {
     let started = std::time::Instant::now();
 
     // wipe the previous virtual store + shims for a clean state
@@ -248,43 +463,101 @@ async fn materialize(
     let mut fetched_bytes: u64 = 0;
     let mut fetched_count: u64 = 0;
     if !jobs.is_empty() {
+        progress.stage("downloading");
+        let total = jobs.len() as u64;
+        progress.bump_jobs(0, total, 0);
         let sem = Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
         let reg = reg.clone();
         let mut set = tokio::task::JoinSet::new();
         for (id, pkg) in jobs {
-            let reg = reg.clone();
+    let reg = reg.clone();
             let sem = sem.clone();
+    let progress = progress.clone();
+    let direct = direct.clone();
             set.spawn(async move {
                 let _permit = sem.acquire_owned().await.context("semaphore closed")?;
-                let (_dir, bytes) = crate::store::ensure_in_store(&reg, &id, &pkg).await?;
+                // a lane only for the user's declared surface (root + member
+                // manifests); transitive downloads ride the aggregate bar
+                let guard = crate::cmds::progress::lane_for(&id, &direct, &progress);
+                let hook: Option<crate::cmds::progress::LaneHook> = guard.as_ref().map(|g| {
+                    let h = g.hook();
+                    std::sync::Arc::new(h) as crate::cmds::progress::LaneHook
+                });
+                let (_dir, bytes) =
+                    crate::store::ensure_in_store(&reg, &id, &pkg, hook.as_deref()).await?;
+                // queue the persistent `✓ downloaded` line before the slot frees
+                if let Some(g) = &guard {
+                    g.complete();
+                }
+                drop(guard); // the lane idles for the next queued job
                 Ok::<(String, u64), anyhow::Error>((id, bytes))
             });
-        }
-        while let Some(joined) = set.join_next().await {
+        }        while let Some(joined) = set.join_next().await {
             let (_id, bytes) = joined.context("download task panicked")??;
             fetched_bytes += bytes;
             if bytes > 0 {
                 fetched_count += 1;
             }
+            progress.bump_jobs(fetched_count, total, fetched_bytes);
         }
     }
 
-    let mut linked_files = 0u64;
+    progress.stage("linking");
+    let link_total = tree.packages.len() as u64;
+    progress.bump_jobs(0, link_total, 0);
+    let linked_files = link_all(&vroot, tree, concurrency, &progress).await?;
+    // stats for install_in's summary line (printed after the bar clears there)
+    Ok((fetched_bytes, fetched_count, linked_files, started.elapsed().as_secs_f64()))
+}
+
+/// the user's declared surface: every id resolved for the root manifest
+/// (deps + dev, both land in the root map) plus every workspace member's
+/// resolved deps. transitive/internal packages (and zap-managed type deps)
+/// stay out: their downloads ride the aggregate bar lane-less
+fn direct_set(tree: &Tree) -> HashSet<String> {
+    tree.root
+        .values()
+        .chain(tree.members.iter().flat_map(|m| m.deps.values()))
+        .cloned()
+        .collect()
+}
+
+/// link every package's store tree into the project's virtual store, in
+/// parallel: per-package spawn_blocking tasks under the same semaphore as
+/// the downloads (link_tree is sync FS work). packages link into independent
+/// target dirs, so the tasks share nothing; returns the exact file count
+async fn link_all(
+    vroot: &Path,
+    tree: &Tree,
+    concurrency: usize,
+    progress: &crate::cmds::progress::Progress,
+) -> Result<u64> {
+    let link_total = tree.packages.len() as u64;
+    progress.bump_jobs(0, link_total, 0);
+    let sem = Arc::new(tokio::sync::Semaphore::new(concurrency.max(1)));
+    let mut set = tokio::task::JoinSet::new();
     for id in tree.packages.keys() {
         let from = crate::store::store_pkg_dir(id)?;
         let to = vroot.join(crate::util::pkg_dir_name(id));
-        linked_files += crate::store::link_tree(&from, &to)? as u64;
+        let sem = sem.clone();
+        set.spawn(async move {
+            let _permit = sem.acquire_owned().await.context("semaphore closed")?;
+            let n = tokio::task::spawn_blocking(move || crate::store::link_tree(&from, &to))
+                .await
+                .context("link task panicked")??;
+            Ok::<u32, anyhow::Error>(n)
+        });
     }
-    println!(
-        "  {} {} ({}) · {} from local store · {} files linked in {:.2}s",
-        green("fetched"),
-        fetched_count,
-        crate::util::human(fetched_bytes),
-        tree.packages.len() as u64 - fetched_count,
-        linked_files,
-        started.elapsed().as_secs_f64()
-    );
-    Ok((fetched_count, fetched_bytes, linked_files))
+    let mut linked_files: u64 = 0;
+    let mut link_done: u64 = 0;
+    // fail-fast: the first error surfaces when its task drains, like downloads
+    while let Some(joined) = set.join_next().await {
+        let n = joined.context("link task panicked")??;
+        linked_files += n as u64;
+        link_done += 1;
+        progress.bump_jobs(link_done, link_total, 0);
+    }
+    Ok(linked_files)
 }
 
 /// opt-in dependency lifecycle scripts (config: `lifecycle: true`), gated by
@@ -431,8 +704,16 @@ pub fn parse_x_args(args: &[String]) -> Result<(String, String, Vec<String>)> {
 
 /// look up a bin across the installed tree: registry packages, type deps, members
 pub fn find_local_bin(name: &str) -> Result<Option<(PathBuf, PathBuf)>> {
-    let ctx = crate::util::find_root()?;
-    let install_root = install_root_for(&ctx);
+    // outside any project there's no local tree: None lets the caller fall
+    // back to dlx instead of erroring (npx-style remote run from anywhere)
+    let Ok(ctx) = crate::util::find_root() else {
+        return Ok(None);
+    };
+    find_local_bin_in(&install_root_for(&ctx), name)
+}
+
+/// the lookup against one install root (testable without cwd games)
+pub fn find_local_bin_in(install_root: &Path, name: &str) -> Result<Option<(PathBuf, PathBuf)>> {
     let Some(lock) = crate::lockfile::read(&install_root.join(".zap-lock.json"))? else {
         return Ok(None);
     };
@@ -442,7 +723,7 @@ pub fn find_local_bin(name: &str) -> Result<Option<(PathBuf, PathBuf)>> {
         if let Some(rel) = pkg.bin.get(name) {
             return Ok(Some((
                 vroot.join(crate::util::pkg_dir_name(id)).join(rel.trim_start_matches("./")),
-                install_root,
+                install_root.to_path_buf(),
             )));
         }
     }
@@ -457,7 +738,7 @@ pub fn find_local_bin(name: &str) -> Result<Option<(PathBuf, PathBuf)>> {
             bin,
         );
         if let Some(rel) = normalized.get(name) {
-            return Ok(Some((member.join(rel.trim_start_matches("./")), install_root)));
+            return Ok(Some((member.join(rel.trim_start_matches("./")), install_root.to_path_buf())));
         }
     }
     Ok(None)
@@ -550,6 +831,15 @@ pub fn walk(
     chain.pop();
 }
 
+/// test-only: one process-wide lock around ZAP_HOME env mutation, cargo
+/// runs test threads in parallel and the env leaks process-wide; poison-
+/// healing so one panic doesn't cascade
+#[cfg(test)]
+pub(crate) fn env_test_lock() -> std::sync::MutexGuard<'static, ()> {
+    static L: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    L.lock().unwrap_or_else(|p| p.into_inner())
+}
+
 pub fn dir_stats(dir: &Path) -> (u64, u64) {
     let mut files = 0u64;
     let mut bytes = 0u64;
@@ -585,7 +875,7 @@ pub fn inject_skills(path: &Path, block: &str) -> Result<()> {
     if let Some(start) = content.find(SKILLS_START) {
         if let Some(end_rel) = content[start..].find(SKILLS_END) {
             let end = start + end_rel + SKILLS_END.len();
-            let new = format!("{}{}\n{}\n{}", &content[..start], block, "", &content[end..].trim_start_matches('\n'));
+            let new = format!("{}{}\n{}\n{}", &content[..start], block, "", content[end..].trim_start_matches('\n'));
             std::fs::write(path, new)?;
             return Ok(());
         }
@@ -713,7 +1003,7 @@ pub fn why_project(root: &Path, target: &str) -> Result<i32> {
 // gitignore
 
 /// zap runtime entries a project's .gitignore should carry (mirrors zap's own
-/// repo .gitignore). `.zap-lock.json` is deliberately absent — lockfiles are
+/// repo .gitignore). `.zap-lock.json` is deliberately absent, lockfiles are
 /// committed for reproducibility
 const RUNTIME_IGNORES: [&str; 6] = [".zap/", "node_modules/", ".pnp.cjs", ".pnp.json", ".pnp.mjs", ".pnp-resolve.mjs"];
 
@@ -789,6 +1079,475 @@ fn git_repo_above(root: &Path) -> bool {
 mod tests {
     use super::*;
 
+    /// env-touching tests serialize here: ZAP_HOME leaks process-wide and
+    /// cargo runs tests in parallel threads
+    
+    // direct-set builder: root deps + every member's deps, ids resolved
+    // ---- global installs (offline: seeded meta-cache + store)
+
+    /// an offline home + a bin-bearing fake package: bin map with two entries
+    fn seed_global_pkg(name: &str, bins: &[(&str, &str)]) -> PathBuf {
+        let home = tempdir("ghome");
+        std::env::set_var("ZAP_HOME", &home);
+        let cache = crate::util::meta_cache().unwrap();
+        std::fs::create_dir_all(&cache).unwrap();
+        let ver = "1.0.0";
+        let mut bin_map = serde_json::Map::new();
+        let mut store_files: Vec<(String, String)> = Vec::new();
+        for (bin, rel) in bins {
+            bin_map.insert(bin.to_string(), serde_json::json!(rel));
+            store_files.push((rel.to_string(), format!("console.log('{} bin');", bin)));
+        }
+        let pack = serde_json::json!({
+            "name": name,
+            "versions": { ver: { "version": ver, "bin": bin_map, "dist": { "tarball": format!("https://reg.invalid/{}-{}.tgz", name, ver) } } },
+            "dist-tags": { "latest": ver },
+        });
+        let key = crate::util::sha256_hex(name.as_bytes());
+        let wrapped = serde_json::json!({
+            "t": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            "body": pack,
+        });
+        std::fs::write(cache.join(format!("{}.json", key)), wrapped.to_string()).unwrap();
+        let dir = crate::store::store_pkg_dir(&format!("{}@{}", name, ver)).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("package.json"), format!("{{\"name\":\"{}\",\"version\":\"{}\",\"bin\":{}}}", name, ver, serde_json::to_string(&bin_map).unwrap())).unwrap();
+        for (rel, content) in store_files {
+            let p = dir.join(rel.trim_start_matches("./"));
+            std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+            std::fs::write(p, content).unwrap();
+        }
+        std::fs::write(dir.join(".zap-ok"), "ok").unwrap();
+        home
+    }
+
+    #[test]
+    fn global_add_ls_remove_roundtrip_offline() {
+        let _env = crate::cmds::env_test_lock();
+        let home = seed_global_pkg("fakebin", &[("fakebin", "./cli.js")]);
+        let g = crate::cmds::global_root().unwrap();
+        let bin_dir = crate::cmds::global_bin_dir().unwrap();
+
+        // global add works with NO project context: run() never calls find_root
+        let code = crate::cmds::global_add(&["-g".to_string(), "fakebin".to_string()]).unwrap();
+        assert_eq!(code, 0);
+        let dir = g.join("fakebin");
+        assert!(dir.join(".zap-lock.json").is_file(), "its own isolated install ran");
+        assert!(dir.join(".pnp.cjs").is_file(), "pnp runtime in the global dir");
+        // the shim landed in ~/.zap/bin with an absolute path + the pnp hook
+        let shim = bin_dir.join(crate::pnp::shim_file_name("fakebin"));
+        assert!(shim.is_file(), "shim written");
+        let content = std::fs::read_to_string(&shim).unwrap();
+        let cli = dir.join(".zap").join("v").join("fakebin@1.0.0").join("cli.js");
+        assert!(content.contains(&cli.display().to_string()), "absolute bin path embedded");
+        assert!(content.contains("NODE_OPTIONS"), "pnp hook embedded (default linker)");
+        assert!(cli.is_file(), "the bin landed in the global's vroot");
+
+        // ls -g: the global root holds the package (the version comes from its lock)
+        let lock = crate::lockfile::read(&dir.join(".zap-lock.json")).unwrap().unwrap();
+        assert_eq!(lock.root.get("fakebin").map(|s| s.as_str()), Some("fakebin@1.0.0"));
+        crate::cmds::global_ls().unwrap();
+
+        // remove -g: the dir AND the shim go; a second remove errors
+        let code = crate::cmds::global_remove(&["-g".to_string(), "fakebin".to_string()]).unwrap();
+        assert_eq!(code, 0);
+        assert!(!dir.exists(), "global dir removed");
+        assert!(!shim.exists(), "shim removed by the content scan");
+        assert!(crate::cmds::global_remove(&["-g".to_string(), "fakebin".to_string()]).is_err(), "removing a non-global errors");
+        std::env::remove_var("ZAP_HOME");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn global_multi_bin_package_shims_every_bin() {
+        let _env = crate::cmds::env_test_lock();
+        let home = seed_global_pkg("multibin", &[("alfa", "./a.js"), ("beta", "./b.js")]);
+        let bin_dir = crate::cmds::global_bin_dir().unwrap();
+        crate::cmds::global_add(&["-g".to_string(), "multibin".to_string()]).unwrap();
+        for (bin, script) in [("alfa", "a.js"), ("beta", "b.js")] {
+            let shim = bin_dir.join(crate::pnp::shim_file_name(bin));
+            assert!(
+                shim.is_file(),
+                "bin {} shimmed; bin_dir = {:?}",
+                bin,
+                std::fs::read_dir(&bin_dir).map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().to_string()).collect::<Vec<_>>()).unwrap_or_default()
+            );
+            let content = std::fs::read_to_string(&shim).unwrap();
+            assert!(
+                content.contains(script),
+                "shim {} points at its own script {}: {:?}",
+                bin,
+                script,
+                content.replace('\r', "")
+            );
+        }
+        let _ = std::fs::remove_dir_all(crate::cmds::global_root().unwrap());
+        std::env::remove_var("ZAP_HOME");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn direct_set_covers_root_and_members_only() {
+            let tree = Tree {
+                root: BTreeMap::from([
+                    ("ms".to_string(), "ms@2.1.3".to_string()),
+                    ("chalk".to_string(), "chalk@4.1.2".to_string()),
+                ]),
+                packages: BTreeMap::new(),
+                fallback: BTreeMap::new(),
+                members: vec![LockMember {
+                    name: "w".to_string(),
+                    dir: "packages/w".to_string(),
+                    deps: BTreeMap::from([("left-pad".to_string(), "left-pad@1.3.0".to_string())]),
+                }],
+                types: BTreeMap::from([("typescript".to_string(), "typescript@5.9.3".to_string())]),
+            };
+            let s = direct_set(&tree);
+    assert!(s.contains("ms@2.1.3") && s.contains("chalk@4.1.2"), "root deps direct");
+    assert!(s.contains("left-pad@1.3.0"), "member deps direct");
+    assert!(!s.contains("typescript@5.9.3"), "zap-managed types stay lane-less");
+    assert_eq!(s.len(), 3);
+        }
+
+    #[test]
+    fn lane_claims_filter_to_the_direct_set() {
+            // an ACTIVE bar (probe bypassed): only ids in the direct set claim
+    let progress = Arc::new(crate::cmds::progress::Progress::start_with(true, 4));
+    let direct: HashSet<String> = HashSet::from(["top@1.0.0".to_string()]);
+    let g1 = crate::cmds::progress::lane_for("top@1.0.0", &direct, &progress);
+    assert!(g1.is_some(), "a direct dep claims a lane");
+    assert!(crate::cmds::progress::lane_for("mid@1.0.0", &direct, &progress).is_none(), "transitive rides lane-less");
+    assert!(crate::cmds::progress::lane_for("leaf@1.0.0", &direct, &progress).is_none());
+            g1.unwrap().complete();
+            // the completed line persists in the queue
+    assert_eq!(progress.lane_history(), vec!["top@1.0.0".to_string()]);
+            progress.finish();
+        }
+
+    #[test]
+    fn lanes_offline_flow_keeps_the_aggregate_exact() {
+            // seeded top->mid->leaf chain, fully store-seeded (offline): the
+            // aggregate covers all 3, no download jobs (all store hits) so no
+            // lanes, the wiring must not choke on that
+    let _env = crate::cmds::env_test_lock();
+    let home = tempdir("home");
+    std::env::set_var("ZAP_HOME", &home);
+    let proj = tempdir("proj");
+    let cache = crate::util::meta_cache().unwrap();
+    std::fs::create_dir_all(&cache).unwrap();
+    let seed = |name: &str, ver: &str, deps: &[(&str, &str)]| {
+                let dmap: serde_json::Map<String, serde_json::Value> = deps
+                    .iter()
+                    .map(|(n, r)| (n.to_string(), serde_json::json!(r)))
+                    .collect();
+                let pack = serde_json::json!({
+                    "name": name,
+                    "versions": { ver: { "version": ver, "dependencies": dmap, "dist": { "tarball": format!("https://reg.invalid/{}-{}.tgz", name, ver) } } },
+                    "dist-tags": { "latest": ver },
+                });
+                let key = crate::util::sha256_hex(name.as_bytes());
+                let wrapped = serde_json::json!({
+                    "t": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                    "body": pack,
+                });
+                std::fs::write(cache.join(format!("{}.json", key)), wrapped.to_string()).unwrap();
+                let dir = crate::store::store_pkg_dir(&format!("{}@{}", name, ver)).unwrap();
+                std::fs::create_dir_all(&dir).unwrap();
+                std::fs::write(dir.join("package.json"), format!("{{\"name\":\"{}\",\"version\":\"{}\"}}", name, ver)).unwrap();
+                std::fs::write(dir.join(".zap-ok"), "ok").unwrap();
+            };
+            seed("top", "1.0.0", &[("mid", "^1.0.0")]);
+            seed("mid", "1.0.0", &[("leaf", "^1.0.0")]);
+            seed("leaf", "1.0.0", &[]);
+            std::fs::write(
+                proj.join("package.json"),
+                "{\"name\":\"lanes\",\"version\":\"1.0.0\",\"dependencies\":{\"top\":\"^1.0.0\"}}\n",
+            )
+            .unwrap();
+
+    let reg = crate::http::Registry::new(false, false, false, 24, None).unwrap();
+    let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+    let mut members: Vec<LockMember> = Vec::new();
+    let root_deps = BTreeMap::from([("top".to_string(), "^1.0.0".to_string())]);
+    let (tree, _, _, _) = rt
+                .block_on(crate::resolve::resolve(&reg, &root_deps, &mut members, &[], &BTreeMap::new(), &BTreeMap::new()))
+                .unwrap();
+    assert_eq!(tree.packages.len(), 3, "top, mid, leaf all resolve");
+
+    let progress = Arc::new(crate::cmds::progress::Progress::start_with(true, 4));
+    let (fetched_bytes, fetched_count, linked, _) = rt
+                .block_on(materialize(
+                    &proj,
+                    &tree,
+                    &reg,
+                    4,
+                    progress.clone(),
+                    Arc::new(direct_set(&tree)),
+                ))
+                .unwrap();
+            progress.finish();
+    std::env::remove_var("ZAP_HOME");
+
+            // the aggregate covered the whole chain; store hits = no jobs
+    assert_eq!(fetched_count, 0);
+    assert_eq!(fetched_bytes, 0);
+    assert_eq!(linked, 3, "three packages linked");
+    assert!(progress.lane_history().is_empty(), "no downloads, no lanes");
+    let _ = std::fs::remove_dir_all(&home);
+    let _ = std::fs::remove_dir_all(&proj);
+        }
+
+    // ---- dlx / x outside projects (offline: seeded dlx cache)
+
+    #[test]
+    fn find_local_bin_in_looks_up_the_tree_or_none() {
+        let proj = tempdir("localbin");
+        // no lockfile: None (the caller falls back to dlx)
+        assert_eq!(find_local_bin_in(&proj, "whatever").unwrap(), None);
+        // a seeded lock + vroot: Some((bin file, install root))
+        let lock = crate::model::Lockfile {
+            version: 2,
+            root_hash: "x".to_string(),
+            root: BTreeMap::from([("fakebin".to_string(), "fakebin@1.0.0".to_string())]),
+            packages: BTreeMap::from([(
+                "fakebin@1.0.0".to_string(),
+                LockPackage {
+                    integrity: String::new(),
+                    tarball: String::new(),
+                    deps: BTreeMap::new(),
+                    bin: BTreeMap::from([("fakebin".to_string(), "./cli.js".to_string())]),
+                },
+            )]),
+            fallback: BTreeMap::new(),
+            workspaces: Vec::new(),
+            types: BTreeMap::new(),
+        };
+        std::fs::write(proj.join(".zap-lock.json"), serde_json::to_vec_pretty(&lock).unwrap()).unwrap();
+        std::fs::create_dir_all(proj.join(".zap").join("v").join("fakebin@1.0.0")).unwrap();
+        std::fs::write(proj.join(".zap").join("v").join("fakebin@1.0.0").join("cli.js"), "ok").unwrap();
+        let (bin_file, root) = find_local_bin_in(&proj, "fakebin").unwrap().unwrap();
+        assert_eq!(root, proj);
+        assert!(bin_file.ends_with("cli.js") && bin_file.is_file());
+        // an unknown bin: None
+        assert_eq!(find_local_bin_in(&proj, "nope").unwrap(), None);
+        let _ = std::fs::remove_dir_all(&proj);
+    }
+
+    #[test]
+    fn dlx_run_works_from_a_seeded_cache_offline() {
+        // the dlx area is project-independent: seed its packument + the store,
+        // then dlx_run installs into ~/.zap/dlx/<key> and runs the bin, the
+        // test's cwd is the repo (a project!) and that's irrelevant to the path
+        let _env = crate::cmds::env_test_lock();
+        let home = tempdir("dlxhome");
+        std::env::set_var("ZAP_HOME", &home);
+        let cache = crate::util::meta_cache().unwrap();
+        std::fs::create_dir_all(&cache).unwrap();
+        let ver = "1.0.0";
+        let pack = serde_json::json!({
+            "name": "fakebin",
+            "versions": { ver: { "version": ver, "bin": { "fakebin": "./cli.js" }, "dist": { "tarball": "https://reg.invalid/fakebin-1.0.0.tgz" } } },
+            "dist-tags": { "latest": ver },
+        });
+        let key = crate::util::sha256_hex("fakebin".as_bytes());
+        let wrapped = serde_json::json!({
+            "t": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            "body": pack,
+        });
+        std::fs::write(cache.join(format!("{}.json", key)), wrapped.to_string()).unwrap();
+        let dir = crate::store::store_pkg_dir(&format!("fakebin@{}", ver)).unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("package.json"), format!("{{\"name\":\"fakebin\",\"version\":\"{}\",\"bin\":{{\"fakebin\":\"./cli.js\"}}}}", ver)).unwrap();
+        std::fs::write(dir.join("cli.js"), "console.log('fakebin ran');").unwrap();
+        std::fs::write(dir.join(".zap-ok"), "ok").unwrap();
+
+        // dlx installs the one-package manifest into the dlx area and runs it
+        let code = dlx_run("fakebin", String::new(), vec![]).unwrap();
+        assert_eq!(code, 0, "the bin ran under the dlx cache's pnp env");
+        let dlx_dir = crate::util::zap_home().unwrap().join("dlx").join(crate::util::slug("fakebin"));
+        assert!(dlx_dir.join(".pnp.json").is_file(), "the dlx cache holds its own pnp runtime");
+        // a second run reuses the cache (the dir already built)
+        let code = dlx_run("fakebin", String::new(), vec![]).unwrap();
+        assert_eq!(code, 0);
+        std::env::remove_var("ZAP_HOME");
+        let _ = std::fs::remove_dir_all(&home);
+    }
+
+    #[test]
+    fn parallel_link_all_is_exact_and_complete() {
+        let _env = crate::cmds::env_test_lock();
+        let home = tempdir("home");
+        std::env::set_var("ZAP_HOME", &home);
+        let proj = tempdir("proj");
+        let vroot = proj.join(".zap").join("v");
+
+        // three fake packages in the store, nested files each
+        let ids = ["fake-a@1.0.0", "fake-b@2.1.0", "@scope/pkg@0.2.3"];
+        let mut packages = BTreeMap::new();
+        for (i, id) in ids.iter().enumerate() {
+            let dir = crate::store::store_pkg_dir(id).unwrap();
+            for f in 0..(i + 1) {
+                // nested dirs: a/b/file<k>.txt
+                let p = dir.join("a").join("b").join(format!("file{}.txt", f));
+                std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+                std::fs::write(&p, format!("{}-{}", id, f)).unwrap();
+            }
+            packages.insert(
+                id.to_string(),
+                LockPackage {
+                    integrity: String::new(),
+                    tarball: String::new(),
+                    deps: BTreeMap::new(),
+                    bin: BTreeMap::new(),
+                },
+            );
+        }
+        let tree = Tree {
+            root: BTreeMap::new(),
+            packages,
+            fallback: BTreeMap::new(),
+            members: Vec::new(),
+            types: BTreeMap::new(),
+        };
+
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let progress = Arc::new(crate::cmds::progress::Progress::start_with(false, 4));
+        let linked = rt.block_on(link_all(&vroot, &tree, 4, &progress)).unwrap();
+        std::env::remove_var("ZAP_HOME");
+
+        // exact count: 1 + 2 + 3 files, and every file present with content
+        assert_eq!(linked, 6, "per-package file counts sum exactly");
+        for (i, id) in ids.iter().enumerate() {
+            for f in 0..(i + 1) {
+                let p = vroot
+                    .join(crate::util::pkg_dir_name(id))
+                    .join("a")
+                    .join("b")
+                    .join(format!("file{}.txt", f));
+                let text = std::fs::read_to_string(&p).unwrap_or_default();
+                assert_eq!(text, format!("{}-{}", id, f), "{} landed with content", p.display());
+            }
+        }
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&proj);
+    }
+
+    // ---- manifest <-> installation drift (offline: seeded meta-cache + store)
+
+    /// a fake ZAP_HOME with the packuments in the meta-cache and the packages'
+    /// store dirs pre-extracted (with .zap-ok markers), install runs with
+    /// zero network
+    fn offline_setup(packages: &[(&str, &str)]) -> (PathBuf, PathBuf) {
+        let home = tempdir("home");
+        std::env::set_var("ZAP_HOME", &home);
+        let proj = tempdir("proj");
+        // packuments: {"versions": {ver: {version, dist:{tarball}}}, "dist-tags": {latest: ver}}
+        for (name, ver) in packages {
+            let name = name.to_string();
+            let ver = ver.to_string();
+            let pack = serde_json::json!({
+                "name": name,
+                "versions": { ver.clone(): { "version": ver.clone(), "dist": { "tarball": format!("https://registry.npmjs.org/{}/-/{}-{}.tgz", name, name, ver) } } },
+                "dist-tags": { "latest": ver },
+            });
+            let key = crate::util::sha256_hex(name.as_bytes());
+            // mirror http.rs's envelope exactly: {"t": now, "body": pack}
+            let wrapped = serde_json::json!({
+                "t": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+                "body": pack,
+            });
+    std::fs::create_dir_all(crate::util::meta_cache().unwrap()).unwrap();
+            std::fs::write(
+                crate::util::meta_cache().unwrap().join(format!("{}.json", key)),
+                wrapped.to_string(),
+            )
+            .unwrap();
+            // the store copy, extracted + ok-marked so ensure_in_store hits it
+            let dir = crate::store::store_pkg_dir(&format!("{}@{}", name, ver)).unwrap();
+    std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(dir.join("package.json"), format!("{{\"name\":\"{}\",\"version\":\"{}\"}}", name, ver)).unwrap();
+            std::fs::write(dir.join(".zap-ok"), "ok").unwrap();
+        }
+        (home, proj)
+    }
+
+    fn manifest_write(proj: &Path, deps: &[(&str, &str)]) {
+        let m: serde_json::Map<String, serde_json::Value> = deps
+            .iter()
+            .map(|(n, r)| (n.to_string(), serde_json::json!(r)))
+            .collect();
+        std::fs::write(
+            proj.join("package.json"),
+            format!("{}\n", serde_json::to_string_pretty(&serde_json::json!({ "name": "drift", "version": "1.0.0", "dependencies": m })).unwrap()),
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn hand_added_dep_gets_resolved_and_installed() {
+        let _env = crate::cmds::env_test_lock();
+        let (home, proj) = offline_setup(&[("ms", "2.1.3"), ("left-pad", "1.3.0")]);
+        std::fs::write(proj.join(".zaprc.yaml"), "linker: node-modules\n").unwrap();
+        manifest_write(&proj, &[("ms", "^2.0.0")]);
+        install_in(&proj, &[], None).unwrap();
+
+        // hand-add a dep (no lockfile knowledge of it) -> install picks it up
+        manifest_write(&proj, &[("ms", "^2.0.0"), ("left-pad", "^1.0.0")]);
+        install_in(&proj, &[], None).unwrap();
+
+        let lock = crate::lockfile::read(&proj.join(".zap-lock.json")).unwrap().unwrap();
+        assert!(lock.root.contains_key("left-pad"), "forward drift resolved into the lockfile");
+        assert!(proj.join(".zap").join("v").join("left-pad@1.3.0").is_dir(), "materialized");
+        assert!(proj.join("node_modules").join("left-pad").exists(), "junction created");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&proj);
+    }
+
+    #[test]
+    fn hand_removed_dep_disappears_everywhere() {
+        let _env = crate::cmds::env_test_lock();
+        let (home, proj) = offline_setup(&[("ms", "2.1.3"), ("left-pad", "1.3.0")]);
+        std::fs::write(proj.join(".zaprc.yaml"), "linker: node-modules\n").unwrap();
+        manifest_write(&proj, &[("ms", "^2.0.0"), ("left-pad", "^1.0.0")]);
+        install_in(&proj, &[], None).unwrap();
+        assert!(proj.join("node_modules").join("left-pad").exists());
+
+        // hand-remove -> install prunes lockfile, vroot and the junction
+        manifest_write(&proj, &[("ms", "^2.0.0")]);
+        install_in(&proj, &[], None).unwrap();
+
+        let lock = crate::lockfile::read(&proj.join(".zap-lock.json")).unwrap().unwrap();
+        assert!(!lock.root.contains_key("left-pad"), "gone from the lockfile");
+        assert!(!proj.join(".zap").join("v").join("left-pad@1.3.0").exists(), "gone from .zap/v");
+        assert!(!proj.join("node_modules").join("left-pad").exists(), "junction pruned");
+        // no collateral: the surviving dep's junction still works
+        assert!(proj.join("node_modules").join("ms").exists(), "survivor untouched");
+        // and the pnp artifacts are gone with it (node-modules linker removed the runtime)
+        assert!(!proj.join(".pnp.cjs").exists());
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&proj);
+    }
+
+    #[test]
+    fn frozen_lockfile_rejects_drift_without_mutating() {
+        let _env = crate::cmds::env_test_lock();
+        let (home, proj) = offline_setup(&[("ms", "2.1.3"), ("left-pad", "1.3.0")]);
+        manifest_write(&proj, &[("ms", "^2.0.0")]);
+        install_in(&proj, &[], None).unwrap();
+
+        manifest_write(&proj, &[("ms", "^2.0.0"), ("left-pad", "^1.0.0")]);
+        let lock_before = std::fs::read(proj.join(".zap-lock.json")).unwrap();
+        let v_before = std::fs::read_dir(proj.join(".zap").join("v")).unwrap().count();
+        assert!(
+            install_in(&proj, &["--frozen-lockfile".to_string()], None).is_err(),
+            "frozen + drift = error, not a silent re-resolve"
+        );
+        assert_eq!(std::fs::read(proj.join(".zap-lock.json")).unwrap(), lock_before, "lock untouched");
+        assert_eq!(std::fs::read_dir(proj.join(".zap").join("v")).unwrap().count(), v_before, "vroot untouched");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&proj);
+    }
+
     fn tempdir(tag: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("zap-gitignore-{}-{}", tag, std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
@@ -807,7 +1566,7 @@ mod tests {
         assert!(text.contains("# build") && text.contains("dist/"), "unrelated content intact");
         assert!(text.contains("# zap runtime"));
         for e in [".zap/", ".pnp.cjs", ".pnp.json", ".pnp.mjs", ".pnp-resolve.mjs"] {
-            assert!(text.contains(e), "{} appended", e);
+    assert!(text.contains(e), "{} appended", e);
         }
         // the no-trailing-newline source kept its content on its own line
         assert!(text.contains("dist/\n\n# zap runtime"));

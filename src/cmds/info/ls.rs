@@ -8,14 +8,22 @@ use crate::workspace::install_root_for;
 
 pub const NAME: &str = "ls";
 pub const ALIASES: &[&str] = &["list"];
-pub const USAGE: &str = "list dependencies and workspace members";
+pub const USAGE: &str = "list dependencies and workspace members (-g for global installs)";
 pub const ABOUT: &str = "lists the direct dependencies (prod + dev) and workspace members with
-their resolved versions; --all expands to the full tree.";
+their resolved versions; --all expands to the full tree. -g lists the
+globally installed packages instead.";
 pub const EXAMPLE: &str = "  $ zap ls --all
-  list the whole dependency tree, workspaces included";
+  list the whole dependency tree, workspaces included
+  $ zap ls -g
+  list the global installs with their versions";
 
 pub fn run(args: &[String]) -> Result<i32> {
     let all = args.iter().any(|a| a == "--all" || a == "-a");
+    let global = args.iter().any(|a| a == "--global" || a == "-g");
+    if global {
+        // the global list needs no project
+        return crate::cmds::global_ls();
+    }
     let ctx = crate::util::find_root()?;
     let root = install_root_for(&ctx);
     let lock = crate::lockfile::read(&root.join(".zap-lock.json"))?

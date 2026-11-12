@@ -10,7 +10,9 @@ use anyhow::Result;
 use std::collections::VecDeque;
 use std::io::{BufRead, Read, Write};
 use std::path::Path;
-use std::process::{Command, Stdio};
+#[cfg(not(windows))]
+use std::process::Command;
+use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc, Mutex};
 use std::time::Duration;
@@ -780,7 +782,6 @@ mod term {
         fn GetConsoleMode(hconsole: *mut c_void, lpmode: *mut u32) -> i32;
         fn SetConsoleMode(hconsole: *mut c_void, dwmode: u32) -> i32;
         fn ReadFile(hfile: *mut c_void, lpbuffer: *mut c_void, nnumberofbytes: u32, lpnumberofbytes: *mut u32, lpoverlapped: *mut c_void) -> i32;
-        fn GetConsoleScreenBufferInfo(hconsoleoutput: *mut c_void, lpconsolescreenbufferinfo: *mut ScreenBufferInfo) -> i32;
         fn GetConsoleCP() -> u32;
         fn GetConsoleOutputCP() -> u32;
         fn SetConsoleCP(wcodepageid: u32) -> i32;
@@ -834,67 +835,12 @@ mod term {
 
     /// hard-kill a child by pid; grandchildren aren't chased, they finish on
     /// their own or die with the console
-    pub fn kill_pid(pid: u32) {
-        const PROCESS_TERMINATE: u32 = 0x0001;
+    pub fn kill_pid(pid: u32) {        const PROCESS_TERMINATE: u32 = 0x0001;
         unsafe {
             let h = OpenProcess(PROCESS_TERMINATE, 0, pid);
             if !h.is_null() {
                 TerminateProcess(h, 1);
                 CloseHandle(h);
-            }
-        }
-    }
-
-    // COORD/SMALL_RECT/CONSOLE_SCREEN_BUFFER_INFO, field order per wincon.h
-    #[repr(C)]
-    struct SmallRect {
-        left: i16,
-        top: i16,
-        right: i16,
-        bottom: i16,
-    }
-    #[repr(C)]
-    struct ScreenBufferInfo {
-        size_x: i16,
-        size_y: i16,
-        cursor_x: i16,
-        cursor_y: i16,
-        attrs: u16,
-        win: SmallRect,
-        max_x: i16,
-        max_y: i16,
-    }
-
-    /// the VISIBLE console window, not the scrollback buffer: `mode con`
-    /// reports the buffer (thousands of rows on some boxes), and laying out
-    /// against it paints panes below the viewport where every repaint scrolls
-    /// the console and finished boxes drift off-screen
-    pub fn window_size() -> Option<(usize, usize)> {
-        const STD_OUTPUT_HANDLE: u32 = (-11i32) as u32;
-        unsafe {
-            let h = GetStdHandle(STD_OUTPUT_HANDLE);
-            if h.is_null() || h == (-1isize) as *mut c_void {
-                return None;
-            }
-            let mut info = ScreenBufferInfo {
-                size_x: 0,
-                size_y: 0,
-                cursor_x: 0,
-                cursor_y: 0,
-                attrs: 0,
-                win: SmallRect { left: 0, top: 0, right: 0, bottom: 0 },
-                max_x: 0,
-                max_y: 0,
-            };
-            if GetConsoleScreenBufferInfo(h, &mut info) == 0 {
-                return None;
-            }
-            let w = (info.win.right - info.win.left + 1).max(0) as usize;
-            let h = (info.win.bottom - info.win.top + 1).max(0) as usize;
-            if w > 0 && h > 0 {
-                Some((w, h))
-            } else {
-                None
             }
         }
     }
@@ -1017,16 +963,6 @@ mod term {
     }
 }
 
-/// a visible console window is never thousands of rows tall; values beyond
-/// this are scrollback-poisoned (`mode con` buffer dims on some boxes) or
-/// broken env vars, and layout against them paints panes below the viewport
-// shortcut: treat implausible detections as detection failure and fall through
-// the chain to 80x24, srWindow makes this near-unreachable on windows, the
-// guard exists for the mode-con fallback path (piped/odd consoles)
-fn plausible_window(w: usize, h: usize) -> bool {
-    (1..=500).contains(&w) && (1..=200).contains(&h)
-}
-
 /// windows queries the console directly (cheap enough to check every tick);
 /// unix shells out to `stty` per poll, so there it's only every 10th tick
 fn size_poll_tick(tick: u32, direct_query: bool) -> bool {
@@ -1034,63 +970,10 @@ fn size_poll_tick(tick: u32, direct_query: bool) -> bool {
 }
 
 /// terminal size, std-only (+ one kernel32 call for the visible window)
-// shortcut: fallback chain COLUMNS/LINES env -> visible console window (windows srWindow) /
-// `stty size` (unix) -> `mode con` (windows) -> 80x24. mode con is second-to-last on windows
-// because it reports the scrollback buffer height, not the window; layout against the buffer
-// paints panes below the viewport, and mode con labels are localized so only english match.
-// every detection passes plausible_window first, so poisoned values can't reach the layout
+// moved to src/cmds/_progress.rs (pub(crate)) so the progress bar and the
+// pane runner share one copy; the fallback-chain shortcut comment lives there
 fn term_size() -> (usize, usize) {
-    if let (Ok(c), Ok(l)) = (std::env::var("COLUMNS"), std::env::var("LINES")) {
-        if let (Ok(c), Ok(l)) = (c.trim().parse::<usize>(), l.trim().parse::<usize>()) {
-            if plausible_window(c, l) {
-                return (c, l);
-            }
-        }
-    }
-    #[cfg(windows)]
-    {
-        if let Some(size) = term::window_size() {
-            return size;
-        }
-        if let Ok(o) = Command::new("cmd").args(["/d", "/c", "mode con"]).output() {
-            let text = String::from_utf8_lossy(&o.stdout).to_string() + String::from_utf8_lossy(&o.stderr).as_ref();
-            let (mut cols, mut lines) = (None, None);
-            for line in text.lines() {
-                let mut it = line.split_whitespace();
-                while let Some(label) = it.next() {
-                    let Some(value) = it.next().and_then(|v| v.parse::<usize>().ok()) else {
-                        continue;
-                    };
-                    let l = label.trim_end_matches(':').to_ascii_lowercase();
-                    if l.starts_with("col") {
-                        cols = Some(value);
-                    } else if l.starts_with("lin") {
-                        lines = Some(value);
-                    }
-                }
-            }
-            if let (Some(c), Some(l)) = (cols, lines) {
-                if plausible_window(c, l) {
-                    return (c, l);
-                }
-            }
-        }
-    }
-    #[cfg(not(windows))]
-    {
-        // stty reads the tty, not our (piped) stdout, so redirect stdin to it
-        if let Ok(o) = Command::new("sh").args(["-c", "stty size < /dev/tty"]).output() {
-            let nums: Vec<usize> = String::from_utf8_lossy(&o.stdout)
-                .split_whitespace()
-                .filter_map(|x| x.parse::<usize>().ok())
-                .collect();
-            // stty prints "rows cols"
-            if nums.len() == 2 && plausible_window(nums[1], nums[0]) {
-                return (nums[1], nums[0]);
-            }
-        }
-    }
-    (80, 24)
+    crate::cmds::progress::term_size()
 }
 
 #[cfg(test)]
@@ -1306,6 +1189,8 @@ mod tests {
 
     #[test]
     fn window_sanity_clamp() {
+        // plausible_window moved to src/cmds/_progress.rs (shared with the bar)
+        use crate::cmds::progress::plausible_window;
         assert!(plausible_window(80, 24));
         assert!(plausible_window(500, 200));
         assert!(!plausible_window(120, 9001)); // mode con scrollback-poisoned value

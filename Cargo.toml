@@ -7,7 +7,7 @@ description = "a tiny, fast node package manager with a custom pnp runtime"
 [dependencies]
 anyhow = "1"
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "sync"] }
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "blocking", "http2"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "gzip", "blocking", "http2", "stream"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["preserve_order"] }
 flate2 = "1"

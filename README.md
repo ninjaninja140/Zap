@@ -12,7 +12,7 @@
 
 A tiny, fast, ts-first node package manager written in rust, with a custom plug'n'play (pnp) runtime.
 
-## Why does Zap exist?
+## Why does zap exist?
 
 - **its fast**: parallel metadata resolution + parallel tarball downloads, and a global content-addressable store (`~/.zap/store`), repeat installs hardlink out of the store and re-download nothing.
 - **its also small**: one ~3MB binary, no node runtime required to install.
@@ -21,6 +21,8 @@ A tiny, fast, ts-first node package manager written in rust, with a custom plug'
 - **node_modules when you want it**: set `linker: node-modules` in config for a pnpm-style junction layout, plain `node` works with no hooks, editors get native resolution for free.
 - **workspaces**: glob-based monorepo support with one shared resolution tree; members resolve to their real dirs, cross-member deps work in both linkers.
 - **multi-run**: `zap run a b c` runs all listed scripts at once in a live split-pane view, bordered panes with per-script status, colours passed through, paged when they don't fit.
+- **platform-aware**: per-platform packages (esbuild, rollup, native typescript) download only the variant matching your os/cpu, no linux distros on windows machines.
+- **peer-aware**: packages declaring `peerDependencies` get a warning at install when the peer is missing from your project or its version doesn't satisfy the range, with a recommendation, never auto-installed.
 - **reproducible**: `.zap-lock.json` records the resolved tree with integrity hashes; unchanged manifests skip resolution.
 - **publish-ready**: `zap pack` / `zap publish` / `zap whoami` speak the npm protocol, so private registries via `ZAP_REGISTRY` work too.
 - **safe**: every tarball is sha512-verified, and lifecycle scripts never run unless you opt in (`lifecycle: true`).
@@ -31,15 +33,15 @@ A tiny, fast, ts-first node package manager written in rust, with a custom plug'
 | command | what it does |
 |---|---|
 | `zap init` | create a package.json (+ zap runtime ignores in .gitignore) |
-| `zap add <pkg>[@range]...` | add deps (`--dev`/`-D`; workspace member names auto-link as `workspace:*`) |
-| `zap remove <pkg>...` | remove deps |
-| `zap i[nstall]` | install root + workspaces, `--offline`, `--force`, `--refresh` |
+| `zap add <pkg>[@range]...` | add deps (`--dev`/`-D`; workspace member names auto-link as `workspace:*`); `-g` installs globally |
+| `zap remove <pkg>...` | remove deps; `-g` removes a global package |
+| `zap i[nstall]` | install root + workspaces, `--offline`, `--force`, `--refresh`; hand-edited manifests sync on install (missing deps resolve in, removed ones prune out of lockfile + runtime) |
 | `zap ci` | clean install, production deps only (docker/CI builds) |
 | `zap run <script> [args]` | run a package.json script with the linker active (see running scripts below) |
 | `zap run a b c` | run several scripts concurrently in a live split-pane view |
 | `zap <script>` | shorthand for run |
 | `zap exec <cmd> [args]` | run any command with the linker active |
-| `zap x\|dlx <pkg> [args]` | run a package's bin one-off (like npx) |
+| `zap x\|dlx <pkg> [args]` | run a package's bin one-off (like npx), works inside or outside any project |
 | `zap create <tmpl> [args]` | scaffold via create-* initializers (like npm create); adds zap runtime ignores to the project's .gitignore |
 | `zap tsc [args]` | run the zap-managed typescript compiler |
 | `zap pack` | build an npm tarball |
@@ -66,6 +68,15 @@ A tiny, fast, ts-first node package manager written in rust, with a custom plug'
 
 every command also takes `--help` (`zap install --help`, `zap bump --help`): its usage, a
 short explanation and an example use case, in place.
+
+## global installs
+
+`zap add -g <pkg>[@range]` installs a package into its own isolated pnp project under
+`~/.zap/global/<name>/` and shims its bins into `~/.zap/bin/` (each shim carries the
+package's pnp runtime hooks, so they work from any cwd). add `%ZAP_HOME%\bin` (or
+`~/.zap/bin`) to PATH to use them everywhere, zap prints the hint once. one isolated dir
+per package means globals can never conflict with each other. `zap remove -g <pkg>` drops
+the dir + its shims; `zap ls -g` lists what's installed.
 
 ## running scripts
 

@@ -78,7 +78,7 @@ fn banner() -> String {
 
     let mut lines: Vec<String> = LOGO.lines().map(|l| l.to_string()).collect();
 
-    // fit the header line to the underscore strip: "Zap: vX" starts on the first ▁
+    // fit the header line to the underscore strip: "zap: vX" starts on the first ▁
     // column, "Node vY" ends on the last ▁ column
     if let Some(i) = lines.iter().position(|l| l.contains('▁')) {
         let strip = lines[i].clone();
@@ -89,7 +89,7 @@ fn banner() -> String {
             if header.chars().count() < strip_start {
                 header.push_str(&" ".repeat(strip_start - header.chars().count()));
             }
-            let zap_part = format!("Zap: v{}", VERSION);
+            let zap_part = format!("zap: v{}", VERSION);
             let node_part = format!("Node {}", node);
             let pad = (strip_len.saturating_sub(zap_part.chars().count() + node_part.chars().count())).max(2);
             header.push_str(&format!("{}{}{}", zap_part, " ".repeat(pad), node_part));
@@ -125,7 +125,7 @@ fn run(args: &[String]) -> Result<i32> {
     }
 
     match cmd {
-        // bare `zap`: the category overview, same as `zap help` — the
+        // bare `zap`: the category overview, same as `zap help`, the
         // implicit-run path never sees empty args (outside projects that was
         // a find_root error, inside them the scripts listing)
         "" => help_command(&[]),
@@ -310,7 +310,7 @@ fn help_unknown(name: &str) -> String {
     )
 }
 
-/// `zap help`: the category overview only — banner, help usage, one line per
+/// `zap help`: the category overview only, banner, help usage, one line per
 /// group with a live command count from the registry
 fn categories_view() -> String {
     let mut out = format!("{}\n\n{}\n", util::electric(banner()), util::bold("usage:"));
