@@ -20,10 +20,20 @@ MIT, see [LICENSE](LICENSE). © 2026 ninjaninja140
 
 | method | how |
 |---|---|
-| npm | `npm install @zappkg/cli -g` (downloads the binary for your platform at install; `ZAP_DEV_PATH` overrides for dev) |
+| npm | `npm install @zappkg/cli -g` |
+| yarn | `yarn global add @zappkg/cli` (yarn 1) / `corepack enable && yarn dlx @zappkg/cli` (berry, one-off) |
+| pnpm | `pnpm add -g @zappkg/cli` |
+| bun | `bun install -g @zappkg/cli` (or `bunx @zappkg/cli` one-off) |
+| deno | `deno install -A -n zap npm:@zappkg/cli` |
 | from source | `cargo build --release` in this repo |
 
+any node package manager works - they all run the package's postinstall, which downloads
+the prebuilt zap binary for your platform (including musl detection on alpine); the shim
+then works like `zap` everywhere. script installers (`.sh`/`.ps1`) are coming too.
+
 ## Why does zap exist?
+
+zap was originally a private experemental project, a proper adventure into developing with rust after my other project, `microstudio`, where I wanted to build a robust and fast package manager which suited my needs, and container other utilities, improvements and other things I liked from other package managers as well as some of my own ideas into one centralised manager, it also includes the following benefits:
 
 - **its fast**: parallel metadata resolution + parallel tarball downloads, and a global content-addressable store (`~/.zap/store`), repeat installs hardlink out of the store and re-download nothing.
 - **its also small**: one ~3MB binary, no node runtime required to install.
