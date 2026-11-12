@@ -29,7 +29,7 @@ pub fn run(args: &[String]) -> Result<i32> {
         // the args after the command name)
         let mut full = vec![NAME.to_string()];
         full.extend(args.iter().cloned());
-        let heading = crate::heading_block(&full);
+        let heading = crate::heading_block(NAME, &full.join(" "));
         return if names.is_empty() {
             // the three-target all-packages flow lives in outdated.rs,
             // _sel.rs is #[path]-included there; including it here too would

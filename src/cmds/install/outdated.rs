@@ -49,7 +49,7 @@ pub fn run(args: &[String]) -> Result<i32> {
         // sees the args after the command name)
         let mut full = vec![NAME.to_string()];
         full.extend(args.iter().cloned());
-        return interactive_upgrade(&root, &cfg, &crate::heading_block(&full));
+        return interactive_upgrade(&root, &cfg, &crate::heading_block(NAME, &full.join(" ")));
     }
     let lock = crate::lockfile::read(&root.join(".zap-lock.json"))?
         .ok_or_else(|| anyhow::anyhow!("no .zap-lock.json, run `zap install` first"))?;

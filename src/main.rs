@@ -26,24 +26,26 @@ fn ts_badge() -> String {
 
 /// the styled per-command heading block (emblem line, strip, badge+usage,
 /// full command), the same replacement order as always, with
-/// FULL_COMMAND before COMMAND ("COMMAND" is a substring of it). shared by
+/// FULL_COMMAND before COMMAND ("COMMAND" is a substring of it). the badge
+/// (raw target name, pre-collapse) drives the usage lookup, `full` is the
+/// typed command shown dimmed below, decoupled so `zap how <cmd>` can badge
+/// the target while showing what was actually typed. shared by
 /// print_heading and the interactive uis, which paint it inside their alt
 /// screen so it stays visible during interaction
-pub fn heading_block(args: &[String]) -> String {
-    let cmd = args.first().map(|s| s.as_str()).unwrap_or("");
+pub fn heading_block(badge: &str, full: &str) -> String {
     // usage text comes from the command's own file; flag-only commands
     // (version) aren't registry commands, unknown names are implicit
     // script runs, keep the old fallback
-    let usage = cmds::lookup(cmd)
+    let usage = cmds::lookup(badge)
         .map(|c| c.usage)
-        .unwrap_or_else(|| match cmd {
+        .unwrap_or_else(|| match badge {
             "-v" | "--version" => "print the zap version",
             _ => "run a package.json script",
         });
     // flag aliases collapse to their canonical name in the badge
-    let badge = match cmd {
+    let badge = match badge {
         "-v" | "--version" | "version-flag" => "version",
-        _ => cmd,
+        _ => badge,
     };
     let cmd_caps = badge.to_uppercase();
     let styled_cmd = format!("\x1b[48;2;49;86;255m\x1b[97m {} \x1b[0m", cmd_caps);
@@ -51,7 +53,7 @@ pub fn heading_block(args: &[String]) -> String {
     let styled_usage = format!("\x1b[3m\x1b[2m{}\x1b[0m", usage);
     // the full command as typed, greyed out under the header ("zap" prefix is
     // already implied by the header itself, so it's omitted here)
-    let styled_full = util::dim(format!("> {}", args.join(" ")));
+    let styled_full = util::dim(format!("> {}", full));
     HEADING
         .replace("🗲", &format!("\x1b[38;2;49;86;255m🗲\x1b[0m"))
         .replace("zap", styled_zap)
@@ -64,7 +66,8 @@ pub fn heading_block(args: &[String]) -> String {
 
 /// the per-command heading from zap.heading.txt
 fn print_heading(args: &[String]) {
-    println!("{}", heading_block(args));
+    let badge = args.first().map(|s| s.as_str()).unwrap_or("");
+    println!("{}", heading_block(badge, &args.join(" ")));
 }
 
 fn banner() -> String {
@@ -117,6 +120,12 @@ fn main() {
 fn run(args: &[String]) -> Result<i32> {
     let cmd = args.first().map(|s| s.as_str()).unwrap_or("");
     let rest: Vec<String> = args.iter().skip(1).cloned().collect();
+
+    // `zap how <cmd>`: intercept before the heading print so no HOW badge
+    // ever shows, the target's own badge does
+    if cmd == "how" {
+        return how_command(&rest);
+    }
 
     // heading for all commands (skip bare zap and help, the help body is its own front matter)
     if !cmd.is_empty() && !matches!(cmd, "help" | "-h" | "--help") {
@@ -175,18 +184,45 @@ fn command_help(c: &cmds::Command) -> String {
     out
 }
 
+/// `zap how <cmd>`: alias for `<cmd> --help`, the target's help view under
+/// the target's own heading (badge from the canonical name), the typed
+/// command shown in the full-command line
+fn how_command(rest: &[String]) -> Result<i32> {
+    // `zap how --help`/`-h` count as bare how, no recursion
+    let target = rest.iter().map(|s| s.as_str()).find(|a| *a != "--help" && *a != "-h");
+    match target {
+        None => {
+            eprintln!("{}", util::dim("usage: zap how <command>"));
+            Ok(1)
+        }
+        Some(target) => match cmds::lookup(target) {
+            Some(c) => {
+                println!("{}", how_view(c, &format!("how {}", rest.join(" "))));
+                Ok(0)
+            }
+            None => Err(anyhow::anyhow!(how_unknown(target))),
+        },
+    }
+}
+
+/// the how view: target's heading + the same body `<cmd> --help` prints.
+/// pure so the rendering test can share it
+fn how_view(c: &cmds::Command, typed: &str) -> String {
+    format!("{}\n\n{}", heading_block(c.name, typed), command_help(c))
+}
+
+/// the unknown-target error for `zap how`
+fn how_unknown(target: &str) -> String {
+    format!("unknown command '{}' for zap how, try zap help for categories", target)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn heading_block_holds_all_four_lines() {
-        let args = vec![
-            "upgrade".to_string(),
-            "--interactive".to_string(),
-            "chalk".to_string(),
-        ];
-        let s = heading_block(&args);
+        let s = heading_block("upgrade", "upgrade --interactive chalk");
         assert_eq!(s.lines().count(), 4, "emblem, strip, badge, full command");
         assert!(s.contains("UPGRADE"), "the badge collapses to the canonical name");
         assert!(s.contains("> upgrade --interactive chalk"), "full command as typed");
@@ -272,6 +308,33 @@ mod tests {
         // (the old route returned the find_root error); the view bytes are
         // covered by bare_help_is_categories_only
         assert!(run(&[]).is_ok(), "bare zap exits 0");
+    }
+
+    #[test]
+    fn how_renders_the_target_view() {
+        let c = cmds::lookup("add").expect("add in registry");
+        let s = how_view(c, "how add");
+        assert!(s.contains("ADD"), "target's canonical badge");
+        assert!(s.contains("> how add"), "typed full-command line");
+        assert!(s.contains(c.about), "the about paragraph");
+        assert!(s.contains("example:"), "the example block");
+    }
+
+    #[test]
+    fn how_routing_and_errors() {
+        // `zap how add` exits 0 through the same body `add --help` uses
+        let a: Vec<String> = ["how", "add"].iter().map(|s| s.to_string()).collect();
+        assert!(run(&a).is_ok(), "known target exits 0");
+        // bare how (and `--help`/`-h` targets) is a usage hint, exit 1
+        let b: Vec<String> = ["how"].iter().map(|s| s.to_string()).collect();
+        assert!(matches!(run(&b), Ok(1)), "bare how exits 1");
+        let c: Vec<String> = ["how", "--help"].iter().map(|s| s.to_string()).collect();
+        assert!(matches!(run(&c), Ok(1)), "--help target is bare how");
+        // unknown targets error, pointing at the category overview
+        let s = how_unknown("nope");
+        assert!(s.contains("nope") && s.contains("zap help"), "points at zap help");
+        let d: Vec<String> = ["how", "nope"].iter().map(|s| s.to_string()).collect();
+        assert!(run(&d).is_err(), "unknown target errors");
     }
 }
 

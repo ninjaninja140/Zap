@@ -67,7 +67,8 @@ A tiny, fast, ts-first node package manager written in rust, with a custom plug'
 | `zap skills` | inject zap usage into CLAUDE.md / AGENTS.md (`--remove` to strip) |
 
 every command also takes `--help` (`zap install --help`, `zap bump --help`): its usage, a
-short explanation and an example use case, in place.
+short explanation and an example use case, in place. `zap how <command>` is a shortcut for
+the same thing (`zap how add` ≡ `zap add --help`).
 
 ## global installs
 
