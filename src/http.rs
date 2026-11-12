@@ -122,6 +122,36 @@ impl Registry {
         Ok(Some(Arc::new(pack)))
     }
 
+    /// the tarball's package.json is the authoritative description (a proxy
+    /// mirror's cached packument can be stale): update one version's
+    /// description in the cached packument; Ok(true) when the entry changed.
+    /// the freshness timestamp stays untouched (ttl semantics unchanged)
+    pub fn cache_update_description(name: &str, version: &str, description: &str) -> Result<bool> {
+        let cache_file =
+            crate::util::meta_cache()?.join(format!("{}.json", crate::util::sha256_hex(name.as_bytes())));
+        let Ok(text) = std::fs::read_to_string(&cache_file) else {
+            return Ok(false);
+        };
+        let mut v: serde_json::Value =
+            serde_json::from_str(&text).context("cached packument is not valid json")?;
+        let Some(entry) = v
+            .get_mut("body")
+            .and_then(|b| b.get_mut("versions"))
+            .and_then(|vs| vs.get_mut(version))
+        else {
+            return Ok(false); // missing-marker or the version isn't in the cache
+        };
+        if !entry.is_object() {
+            return Ok(false);
+        }
+        if entry.get("description").and_then(|d| d.as_str()) == Some(description) {
+            return Ok(false);
+        }
+        entry["description"] = serde_json::Value::String(description.to_string());
+        std::fs::write(&cache_file, v.to_string())?;
+        Ok(true)
+    }
+
     /// fetch one tarball fully; `hook` fires per chunk so a progress lane can
     /// track the transfer as it happens (chunk loop instead of one .bytes())
     pub async fn tarball(&self, url: &str, hook: Option<DownloadHook<'_>>) -> Result<Vec<u8>> {

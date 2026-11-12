@@ -32,14 +32,18 @@
 - [x] `zap dlx` / `zap x` remote fallback work outside any project (npx-style; local-first bin lookup stays project-aware when one exists)
 - [x] `zap upgrade --interactive`: with package names, a per-package exact-version picker (all registry versions, newest first, prereleases dim but selectable, buffered picks, one install pass); without names, opens the all-packages three-target upgrader; bare `zap upgrade` unchanged
 - [x] `zap version` for real (currently an honest not-implemented stub): major|minor|patch|x.y.z bumps + git tag + changelog generation
+- [x] node packages: `@zappkg/cli` (npm-install shim + postinstall binary downloader: nn140.uk → github order, ZAP_DEV_PATH dev override, vendor/ never packed) + `@zappkg/api` (TS shell-out layer: install/add/remove/resolve/list/why/pack/publish + version; napi-rs crate scaffolded with starter bindings), packages/
+- [x] `@zappkg/api` proper api: src/api_spec.rs (declarative flag/positional/return table for every command) → build.rs generates jsdoc'd Options + argv builders + the ZapApi interface (api.gen.ts, content-compare); spec typos fail the tests, missing entries fail the build, flags can't drift from the real surface
+- [x] `zap inspect <pkg>[@version]`: registry-metadata inspection (deps/optional/peers/description/release history), works outside projects, meta-cached; installed tarballs refresh stale cached descriptions (mirror-staleness fix)
+- [x] `--json` machine output on the read commands: `ls`/`why`/`view`/`outdated` emit structured documents (heading suppressed under the flag); `@zappkg/api`'s wrappers parse them into typed data; native crate deleted, the shell-out layer IS the api
 
 ## successful runs
 - [x] first real CI run on github (verifies macos + publishes artifacts)
 
 ## next up
-- [ ] node API for zap as a native npm package (napi-rs: install/add/remove/resolve/list/why/pack/publish)
-- [ ] colour and make our terminal more fun? [in progress]
-- [ ] zap installer, try from zap.nn140.uk/versions/latest:dev:v0.0.0, if fail then try from github releases
+- [ ] `--json` result objects for the mutating commands (install/add/remove)
+- [ ] colour and make the terminal more fun? [in-progress]
+- [ ] zap installer [in-progress, npm-ified version done, awaiting command line installer from curl version]
 - [ ] "zap console" a tui for using zap for essentially an entire command window, only usable in non-cicd environments
 - [ ] zap multi-run commands need a input system per-terminal, so commands that need inputs can be used
 

@@ -364,6 +364,17 @@ pub fn install_in(root: &Path, args: &[String], pins: Option<&BTreeMap<String, S
         linked_files,
         mat_secs
     );
+    // mirror-staleness fix: the tarball's package.json is the authoritative
+    // description (a proxy's cached packument can be stale); refresh the
+    // meta-cache on drift, one dim note when something actually changed
+    let refreshed = refresh_descriptions(root, &tree);
+    if !refreshed.is_empty() {
+        println!(
+            "  {} refreshed cached description for {}",
+            dim("note:"),
+            dim(refreshed.join(", "))
+        );
+    }
     match cfg.linker {
         Linker::Pnp => {
             crate::pnp::write_runtime(root, &tree, cfg.strict)?;
@@ -508,6 +519,26 @@ async fn materialize(
     let linked_files = link_all(&vroot, tree, concurrency, &progress).await?;
     // stats for install_in's summary line (printed after the bar clears there)
     Ok((fetched_bytes, fetched_count, linked_files, started.elapsed().as_secs_f64()))
+}
+
+/// description drift check: for every materialized package, the tarball's
+/// package.json description wins over the cached packument's (proxy mirrors
+/// go stale); returns the ids whose cache entry was rewritten. runs on every
+/// install at any version, the read is local fs, the write only on drift
+fn refresh_descriptions(root: &Path, tree: &Tree) -> Vec<String> {
+    let vroot = root.join(".zap").join("v");
+    let mut updated = Vec::new();
+    for id in tree.packages.keys() {
+        let Some((name, ver)) = id.rsplit_once('@') else { continue };
+        let Ok(v) = crate::util::read_json(&vroot.join(crate::util::pkg_dir_name(id)).join("package.json")) else {
+            continue;
+        };
+        let Some(desc) = v.get("description").and_then(|d| d.as_str()) else { continue };
+        if crate::http::Registry::cache_update_description(name, ver, desc).unwrap_or(false) {
+            updated.push(id.clone());
+        }
+    }
+    updated
 }
 
 /// the user's declared surface: every id resolved for the root manifest
@@ -1083,7 +1114,7 @@ mod tests {
     /// cargo runs tests in parallel threads
     
     // direct-set builder: root deps + every member's deps, ids resolved
-    // ---- global installs (offline: seeded meta-cache + store)
+    // global installs (offline: seeded meta-cache + store)
 
     /// an offline home + a bin-bearing fake package: bin map with two entries
     fn seed_global_pkg(name: &str, bins: &[(&str, &str)]) -> PathBuf {
@@ -1297,7 +1328,7 @@ mod tests {
     let _ = std::fs::remove_dir_all(&proj);
         }
 
-    // ---- dlx / x outside projects (offline: seeded dlx cache)
+    // dlx / x outside projects (offline: seeded dlx cache)
 
     #[test]
     fn find_local_bin_in_looks_up_the_tree_or_none() {
@@ -1432,7 +1463,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&proj);
     }
 
-    // ---- manifest <-> installation drift (offline: seeded meta-cache + store)
+    // manifest <-> installation drift (offline: seeded meta-cache + store)
 
     /// a fake ZAP_HOME with the packuments in the meta-cache and the packages'
     /// store dirs pre-extracted (with .zap-ok markers), install runs with
@@ -1617,5 +1648,62 @@ mod tests {
         assert_eq!(ensure_gitignore(&deep).unwrap().unwrap(), "created");
         assert!(deep.join(".gitignore").is_file());
         let _ = std::fs::remove_dir_all(&base);
+    }
+
+    // description refresh (offline: seeded meta-cache + store)
+
+    #[test]
+    fn install_refreshes_stale_cached_descriptions() {
+        // a proxy mirror's cached packument carries a stale description; the
+        // store tarball's package.json is authoritative: install must rewrite
+        // the cache entry, and inspect must then render the real words
+        let _env = crate::cmds::env_test_lock();
+        let home = tempdir("desc");
+        std::env::set_var("ZAP_HOME", &home);
+        let proj = tempdir("descproj");
+        let cache = crate::util::meta_cache().unwrap();
+        std::fs::create_dir_all(&cache).unwrap();
+        let pack = serde_json::json!({
+            "name": "staledesc",
+            "versions": { "1.0.0": { "version": "1.0.0", "description": "stale mirror words", "dist": { "tarball": "https://reg.invalid/staledesc-1.0.0.tgz" } } },
+            "dist-tags": { "latest": "1.0.0" },
+        });
+        let key = crate::util::sha256_hex("staledesc".as_bytes());
+        let wrapped = serde_json::json!({
+            "t": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs(),
+            "body": pack,
+        });
+        std::fs::write(cache.join(format!("{}.json", key)), wrapped.to_string()).unwrap();
+        // the store copy (extracted + ok-marked) holds the right description
+        let dir = crate::store::store_pkg_dir("staledesc@1.0.0").unwrap();
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("package.json"),
+            "{\"name\":\"staledesc\",\"version\":\"1.0.0\",\"description\":\"the real words\"}",
+        )
+        .unwrap();
+        std::fs::write(dir.join(".zap-ok"), "ok").unwrap();
+        std::fs::write(
+            proj.join("package.json"),
+            "{\"name\":\"drift\",\"version\":\"1.0.0\",\"dependencies\":{\"staledesc\":\"^1.0.0\"}}\n",
+        )
+        .unwrap();
+
+        install_in(&proj, &[], None).unwrap();
+
+        // the meta-cache entry now carries the tarball's description
+        let text = std::fs::read_to_string(cache.join(format!("{}.json", key))).unwrap();
+        assert!(text.contains("the real words"), "cache refreshed: {}", text);
+        assert!(!text.contains("stale mirror words"), "stale words gone: {}", text);
+        // and inspect renders the refreshed packument, offline, from the cache
+        let reg = crate::http::Registry::new(false, false, true, 24, None).unwrap();
+        let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().unwrap();
+        let pack = rt.block_on(reg.packument("staledesc")).unwrap();
+        let out = crate::cmds::info::inspect::render("staledesc", &pack, "1.0.0");
+        assert!(out.contains("staledesc@1.0.0"), "header: {}", out);
+        assert!(out.contains("- ") && out.contains("the real words"), "refreshed description: {}", out);
+        std::env::remove_var("ZAP_HOME");
+        let _ = std::fs::remove_dir_all(&home);
+        let _ = std::fs::remove_dir_all(&proj);
     }
 }

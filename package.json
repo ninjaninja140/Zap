@@ -1,0 +1,16 @@
+{
+  "name": "zap",
+  "private": true,
+  "packageManager": "yarn@4.18.1",
+  "scripts": {
+    "lint": "biome lint packages",
+    "lint:fix": "biome lint --write packages",
+    "format": "biome format packages",
+    "format:fix": "biome format --write packages",
+    "check": "biome check packages",
+    "check:fix": "biome check --write packages"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.6"
+  }
+}

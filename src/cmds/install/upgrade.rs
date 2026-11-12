@@ -81,8 +81,9 @@ fn pick_versions(root: &Path, cfg: &Config, names: &[String], heading: &str) -> 
         }
         wanted.push((name, !in_deps && in_dev));
     }
-    if !super::outdated::console_available() {
-        // piped stdin: bail before any network work
+    if !crate::cmds::rawui::console_available() {
+        // piped stdin: bail before any network work (the probe moved to the
+        // shared rawui layer with the rest of the terminal plumbing)
         bail!("interactive mode needs a terminal");
     }
 

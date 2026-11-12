@@ -3,6 +3,13 @@ name = "zap"
 version = "0.1.0"
 edition = "2021"
 description = "a tiny, fast node package manager with a custom pnp runtime"
+license = "MIT"
+authors = ["ninjaninja140"]
+readme = "README.md"
+repository = "https://github.com/ninjaninja140/zap"
+keywords = ["nodejs", "package manager"]
+categories = ["command-line-utilities", "filesystem"]
+build = "build.rs"
 
 [dependencies]
 anyhow = "1"

@@ -127,8 +127,10 @@ fn run(args: &[String]) -> Result<i32> {
         return how_command(&rest);
     }
 
-    // heading for all commands (skip bare zap and help, the help body is its own front matter)
-    if !cmd.is_empty() && !matches!(cmd, "help" | "-h" | "--help") {
+    // heading for all commands (skip bare zap and help, the help body is its own
+    // front matter). --json requests machine-readable output, so the human
+    // heading is suppressed there too, stdout carries only the document
+    if !cmd.is_empty() && !matches!(cmd, "help" | "-h" | "--help") && !rest.iter().any(|a| a == "--json") {
         print_heading(args);
         println!();
     }

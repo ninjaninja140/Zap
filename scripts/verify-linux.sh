@@ -5,7 +5,7 @@ set -e
 
 if ! command -v cargo > /dev/null 2>&1; then
     if command -v apt-get > /dev/null 2>&1; then
-        apt-get update -qq && apt-get install -y -qq curl build-essential nodejs > /dev/null
+        apt-get update -qq && apt-get install -y -qq curl build-essential musl-tools nodejs > /dev/null
     elif command -v dnf > /dev/null 2>&1; then
         dnf install -y curl gcc gcc-c++ make nodejs > /dev/null
     fi
@@ -21,10 +21,15 @@ echo "### linux test ###"
 cargo test --release 2>&1 | tail -3
 echo "### linux build ###"
 cargo build --release 2>&1 | tail -1
-echo "### shim smoke (pnp runtime on real unix) ###"
+echo "### musl build (static binary) ###"
+rustup target add x86_64-unknown-linux-musl 2>&1 | tail -1
+cargo build --release --target x86_64-unknown-linux-musl 2>&1 | tail -1
+MUSL_ZAP="$HOME/zap-verify/target/x86_64-unknown-linux-musl/release/zap"
+[ -x "$MUSL_ZAP" ] || { echo "musl binary missing"; exit 1; }
+echo "### shim smoke (pnp runtime on the musl binary) ###"
 mkdir -p /tmp/zap-smoke && cd /tmp/zap-smoke
-~/zap-verify/target/release/zap init > /dev/null
-~/zap-verify/target/release/zap add chalk@4 2>&1 | tail -2
+"$MUSL_ZAP" init > /dev/null
+"$MUSL_ZAP" add chalk@4 2>&1 | tail -2
 echo "const c = require('chalk'); console.log('unix-pnp-ok', typeof c)" > check.js
-~/zap-verify/target/release/zap exec node check.js
+"$MUSL_ZAP" exec node check.js
 echo LINUX-VERIFY-OK

@@ -8,10 +8,18 @@ pub use _shared::*;
 #[path = "_progress.rs"]
 pub mod progress;
 
+#[path = "_rawui.rs"]
+pub mod rawui;
+
 mod gen;
 
 // hoist the generated group modules + registry to cmds level
 pub use gen::*;
+
+// the generated-api spec table (build.rs includes the same file for the ts
+// generation, keep it free of crate dependencies)
+#[path = "../api_spec.rs"]
+pub mod api_spec;
 
 /// one registry entry, generated per file under src/cmds/<group>/<command>.rs
 pub struct Command {
@@ -76,6 +84,75 @@ mod tests {
         for (g, desc) in GROUP_INFO {
             assert!(COMMANDS.iter().any(|c| c.group == *g), "GROUP_INFO group '{}' has no commands", g);
             assert!(!desc.is_empty(), "GROUP_INFO group '{}': empty description", g);
+        }
+    }
+
+    /// the generated ts metadata (build.rs → packages/api/src/commands.gen.ts)
+    /// mirrors the registry: every command name as meta, and the crate version
+    /// as ZAP_VERSION. optional read: a fresh clone may not have run a build
+    /// that emits the file yet
+    #[test]
+    fn generated_ts_surface_matches_registry() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/api/src/commands.gen.ts");
+        let Ok(src) = std::fs::read_to_string(&path) else { return };
+        for c in COMMANDS {
+            assert!(src.contains(&format!("name: \"{}\"", c.name)), "generated ts missing meta for `{}`", c.name);
+        }
+        assert!(
+            src.contains(&format!("export const ZAP_VERSION = \"{}\";", env!("CARGO_PKG_VERSION"))),
+            "generated ts ZAP_VERSION is not the crate version"
+        );
+    }
+
+    /// the node packages' versions are synced from the crate by build.rs;
+    /// build.rs's own unit tests don't run under `cargo test`, so assert the
+    /// effect here (a build resyncs a drifted package.json)
+    #[test]
+    fn node_package_versions_track_the_crate() {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        for pkg in ["packages/cli/package.json", "packages/api/package.json"] {
+            let Ok(src) = std::fs::read_to_string(root.join(pkg)) else { continue };
+            let version = src.lines().find_map(|l| l.trim().strip_prefix("\"version\": \"")).and_then(|r| r.strip_suffix("\","));
+            assert_eq!(version, Some(env!("CARGO_PKG_VERSION")), "{}: version drifted from the crate", pkg);
+        }
+    }
+
+    /// the api spec table must cover the registry exactly, both directions,
+    /// same completeness guard as about/example
+    #[test]
+    fn api_spec_covers_the_registry() {
+        for c in COMMANDS {
+            let spec = api_spec::SPECS
+                .iter()
+                .find(|s| s.name == c.name)
+                .unwrap_or_else(|| panic!("api_spec.rs: no spec for command `{}`", c.name));
+            assert!(!spec.returns.is_empty(), "{}: empty returns type", c.name);
+            for o in spec.options {
+                assert!(o.flag.starts_with("--"), "{}: option flag `{}` must be the long form", c.name, o.flag);
+                assert!(!o.desc.is_empty(), "{}: option `{}` has an empty desc", c.name, o.flag);
+            }
+        }
+        for s in api_spec::SPECS {
+            assert!(
+                COMMANDS.iter().any(|c| c.name == s.name),
+                "api_spec.rs: command `{}` is not in the registry (stale spec?)",
+                s.name
+            );
+        }
+    }
+
+    /// the generated ts api carries the spec: a builder per command and every
+    /// option's flag string (the flags are the drift surface, a spec typo
+    /// shows up here and in the ts argv unit tests)
+    #[test]
+    fn api_gen_ts_carries_the_spec_flags() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("packages/api/src/api.gen.ts");
+        let Ok(src) = std::fs::read_to_string(&path) else { return };
+        for s in api_spec::SPECS {
+            assert!(src.contains(&format!("function {}Argv", s.name)), "api.gen.ts missing builder for `{}`", s.name);
+            for o in s.options {
+                assert!(src.contains(o.flag), "api.gen.ts missing flag `{}` (spec of `{}`)", o.flag, s.name);
+            }
         }
     }
 }

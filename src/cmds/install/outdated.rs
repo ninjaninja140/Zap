@@ -12,18 +12,22 @@ use crate::workspace::install_root_for;
 mod sel;
 
 // re-exports so upgrade.rs can share the picker machinery without including
-// _sel.rs twice (which would double-compile the module and fork its types)
-pub use sel::{console_available, pick_version, sort_versions};
+// _sel.rs twice (which would double-compile the module and fork its types);
+// the terminal plumbing itself lives in crate::cmds::rawui
+pub use sel::{pick_version, sort_versions};
 
 pub const NAME: &str = "outdated";
 pub const ALIASES: &[&str] = &[];
-pub const USAGE: &str = "show deps behind the registry (exit 1 if any); -i picks targets (keep / latest-of-major / latest)";
+pub const USAGE: &str = "show deps behind the registry (exit 1 if any; --json, -i picks targets)";
 pub const ABOUT: &str = "shows every locked dep that's behind the registry with its severity
 (outdated / major behind) and exits 1 when anything is stale, so it drops
-straight into CI. -i opens a raw-mode selector: each dep gets a three-way
-target, keep the current version, bump to the latest of its major, or jump
-to the absolute latest.";
-pub const EXAMPLE: &str = "  $ zap outdated -i
+straight into CI. --json prints the rows as {outdated: [...], upToDate: [...]}
+instead of the table, keeping the exit code. -i opens a raw-mode selector:
+each dep gets a three-way target, keep the current version, bump to the
+latest of its major, or jump to the absolute latest.";
+pub const EXAMPLE: &str = "  $ zap outdated --json
+  the rows as a json document, exit 1 when anything is stale
+  $ zap outdated -i
   pick per-dep targets (current / latest-of-major / latest) and apply";
 
 // one checked dep: identity + what the registry said
@@ -54,6 +58,11 @@ pub fn run(args: &[String]) -> Result<i32> {
     let lock = crate::lockfile::read(&root.join(".zap-lock.json"))?
         .ok_or_else(|| anyhow::anyhow!("no .zap-lock.json, run `zap install` first"))?;
     let rows = collect(&root, &lock, &cfg)?;
+    if args.iter().any(|a| a == "--json") {
+        println!("{}", serde_json::to_string_pretty(&outdated_json(&rows))?);
+        // same exit semantics as the table: stale (or unknown) rows → 1
+        return Ok(if rows.iter().any(|r| !r.latest.is_empty() && r.latest != r.current) { 1 } else { 0 });
+    }
     if rows.is_empty() {
         println!("{}", dim("no dependencies to check"));
         return Ok(0);
@@ -206,6 +215,31 @@ fn interactive(root: &Path, cfg: &Config, rows: &[Row], heading: &str) -> Result
         }
     }
     Ok(code)
+}
+
+/// the --json mirror of the table: rows with a registry latest that differs
+/// from current are outdated (major flags a major bump), everything else,
+/// up to date or unknown latest, lands in upToDate, same buckets the table
+/// colors
+fn outdated_json(rows: &[Row]) -> serde_json::Value {
+    let mut outdated = Vec::new();
+    let mut up_to_date = Vec::new();
+    for r in rows {
+        if !r.latest.is_empty() && r.latest != r.current {
+            let major = match (semver::Version::parse(&r.current), semver::Version::parse(&r.latest)) {
+                (Ok(c), Ok(l)) => c.major < l.major,
+                _ => false,
+            };
+            outdated.push(serde_json::json!({
+                "name": r.name, "current": r.current, "wanted": r.wanted, "latest": r.latest, "major": major,
+            }));
+        } else {
+            up_to_date.push(serde_json::json!({
+                "name": r.name, "current": r.current, "wanted": r.wanted, "latest": r.latest,
+            }));
+        }
+    }
+    serde_json::json!({ "outdated": outdated, "upToDate": up_to_date })
 }
 
 /// every locked dep (root manifest + workspace members) with wanted/latest
@@ -394,5 +428,39 @@ mod tests {
         // same version listed twice collapses in the map; max() stays total
         let dup = packument(&["2.0.0", "2.0.0", "2.1.0"]);
         assert_eq!(latest_major_from("2.0.0", &dup), "2.1.0");
+    }
+
+    fn row(source: &str, name: &str, current: &str, wanted: &str, latest: &str) -> Row {
+        Row {
+            source: source.to_string(),
+            name: name.to_string(),
+            current: current.to_string(),
+            wanted: wanted.to_string(),
+            latest_major: String::new(),
+            latest: latest.to_string(),
+        }
+    }
+
+    #[test]
+    fn outdated_json_buckets_like_the_table() {
+        let rows = vec![
+            row("", "fresh", "1.0.0", "^1.0.0", "1.0.0"),   // up to date
+            row("", "behind", "1.2.0", "^1.0.0", "1.9.0"),  // outdated, same major
+            row("", "old", "1.2.0", "^1.0.0", "2.0.0"),     // outdated, major behind
+            row("", "mystery", "1.0.0", "^1.0.0", "?"),     // unknown → upToDate bucket
+        ];
+        let parsed: serde_json::Value = serde_json::from_str(&serde_json::to_string(&outdated_json(&rows)).unwrap()).unwrap();
+        // mirrors the table's buckets: unknown-"?" rows count as stale there too
+        assert_eq!(parsed["outdated"].as_array().map(|a| a.len()), Some(3));
+        assert_eq!(parsed["outdated"][0]["name"], "behind");
+        assert_eq!(parsed["outdated"][0]["major"], false);
+        assert_eq!(parsed["outdated"][1]["name"], "old");
+        assert_eq!(parsed["outdated"][1]["major"], true);
+        assert_eq!(parsed["outdated"][1]["wanted"], "^1.0.0");
+        assert_eq!(parsed["outdated"][2]["name"], "mystery");
+        assert_eq!(parsed["upToDate"].as_array().map(|a| a.len()), Some(1));
+        assert_eq!(parsed["upToDate"][0]["name"], "fresh");
+        // up-to-date rows carry no major flag
+        assert!(parsed["upToDate"][0].get("major").is_none());
     }
 }

@@ -1,16 +1,28 @@
 ```
-          █          
+          ██          
          ██          ▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁▁
        ███           ░        ░░░      ░░░       ░░
      ████            ▒▒▒▒▒▒  ▒▒▒  ▒▒▒▒  ▒▒  ▒▒▒▒  ▒
     █████████        ▓▓▓▓  ▓▓▓▓▓  ▓▓▓▓  ▓▓       ▓▓
-        ███          ██  ███████        ██  ███████
+        ████         ██  ███████        ██  ███████
        ███           █        ██  ████  ██  ███████
       ██             ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
-      █         
+     ██         
 ```
 
 A tiny, fast, ts-first node package manager written in rust, with a custom plug'n'play (pnp) runtime.
+
+# license
+
+MIT, see [LICENSE](LICENSE). © 2026 ninjaninja140
+
+## installing zap
+
+| method | how |
+|---|---|
+| npm | `npm install @zappkg/cli -g` (downloads the binary for your platform at install; `ZAP_DEV_PATH` overrides for dev) |
+| from source | `cargo build --release` in this repo |
+| more | an installer from zap.nn140.uk / github releases is planned (see TODO) |
 
 ## Why does zap exist?
 
@@ -50,11 +62,12 @@ A tiny, fast, ts-first node package manager written in rust, with a custom plug'
 | `zap login` / `zap logout` | authenticate with (or clear credentials for) the registry |
 | `zap registry [add\|use\|list\|current]` | switch registries (private -> public flow) |
 | `zap upgrade [pkg...]` | no args: re-resolve in ranges; with args: bump to latest; `-i`: pick exact versions per package (no args: all-packages interactive upgrader) |
-| `zap outdated` | show deps behind the registry (exit 1 when outdated); `-i` interactively picks upgrades, left/right cycles each package's target: keep (default) → latest of its major → absolute latest |
+| `zap outdated` | show deps behind the registry (exit 1 when outdated); `--json` for the structured rows; `-i` interactively picks upgrades, left/right cycles each package's target: keep (default) → latest of its major → absolute latest |
 | `zap version [major\|minor\|patch\|x.y.z]` | bump package.json version (+ git commit/tag `v*`, changelog entry; `--no-git-tag-version`, `-m <msg>`) |
-| `zap ls [--all]` | list deps + workspace members |
-| `zap why <pkg>` | dependency chains (`--project` scans source files) |
-| `zap view\|info <pkg>` | registry metadata for a package (cached) |
+| `zap ls [--all]` | list deps + workspace members; `--json` for the structured doc |
+| `zap why <pkg>` | dependency chains (`--project` scans source files); `--json` for chains as data |
+| `zap inspect <pkg>[@version]` | a package's deps, peers, description and release history (works outside projects) |
+| `zap view\|info <pkg>` | registry metadata for a package (cached); `--json` for the structured view |
 | `zap licenses` | license summary of installed packages |
 | `zap audit` | check installed packages for known advisories |
 | `zap doctor` | sanity checks: lockfile sync, runtime, ts, store |

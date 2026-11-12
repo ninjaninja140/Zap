@@ -1,0 +1,30 @@
+{
+  "name": "@zappkg/api",
+  "version": "0.1.0",
+  "description": "programmatic zap - node api for the zap package manager",
+  "keywords": [
+    "package-manager",
+    "api"
+  ],
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "typecheck": "tsc --noEmit",
+    "test": "node --test test/"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT",
+  "repository": "git+https://github.com/ninjaninja140/zap.git",
+  "files": [
+    "dist/",
+    "README.md"
+  ],
+  "devDependencies": {
+    "@types/node": "^24",
+    "typescript": "^7.0.2",
+    "@biomejs/biome": "^2.6.6"
+  }
+}

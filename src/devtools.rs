@@ -71,6 +71,12 @@ pub fn info_cmd(args: &[String]) -> Result<i32> {
         .clone()
         .and_then(|l| pack.versions.get(&l))
         .ok_or_else(|| anyhow!("no latest version for `{}`", name))?;
+
+    if args.iter().any(|a| a == "--json") {
+        println!("{}", serde_json::to_string_pretty(&view_json(&name, &pack, latest))?);
+        return Ok(0);
+    }
+
     println!("{}@{}", green(&name), latest.version);
     if let Some(d) = latest.extra.get("description").and_then(|v| v.as_str()) {
         println!("  {}", dim(d));
@@ -105,6 +111,38 @@ fn value_str(v: &serde_json::Value) -> String {
         serde_json::Value::String(s) => s.clone(),
         other => other.to_string(),
     }
+}
+
+/// the --json mirror of the human summary: latest version, dist-tags,
+/// the versions list and the latest manifest's description/deps/license/home
+fn view_json(name: &str, pack: &crate::model::Packument, latest: &crate::model::VersionInfo) -> serde_json::Value {
+    let mut tags = serde_json::Map::new();
+    if let Some(l) = &pack.dist_tags.latest {
+        tags.insert("latest".into(), serde_json::json!(l));
+    }
+    for (k, v) in &pack.dist_tags.other {
+        tags.insert(k.clone(), serde_json::json!(value_str(v)));
+    }
+    let mut doc = serde_json::json!({
+        "name": name,
+        "version": latest.version,
+        "distTags": tags,
+        "versions": pack.versions.keys().collect::<Vec<_>>(),
+    });
+    let obj = doc.as_object_mut().unwrap();
+    if let Some(d) = latest.extra.get("description").and_then(|v| v.as_str()) {
+        obj.insert("description".into(), serde_json::json!(d));
+    }
+    if !latest.dependencies.is_empty() {
+        obj.insert("dependencies".into(), serde_json::json!(latest.dependencies));
+    }
+    if let Some(l) = latest.extra.get("license").and_then(|v| v.as_str()) {
+        obj.insert("license".into(), serde_json::json!(l));
+    }
+    if let Some(h) = latest.extra.get("homepage").and_then(|v| v.as_str()) {
+        obj.insert("homepage".into(), serde_json::json!(h));
+    }
+    doc
 }
 
 // licenses
@@ -385,4 +423,44 @@ fn store_stats(dir: &std::path::Path) -> (u64, u64) {
         }
     }
     (files, bytes)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::view_json;
+
+    fn packument() -> crate::model::Packument {
+        serde_json::from_value(serde_json::json!({
+            "versions": {
+                "1.0.0": { "version": "1.0.0" },
+                "2.0.0": {
+                    "version": "2.0.0",
+                    "dependencies": { "ms": "^2.1.0" },
+                    "description": "a test packument",
+                    "license": "MIT",
+                    "homepage": "https://example.com"
+                }
+            },
+            "dist-tags": { "latest": "2.0.0", "next": "3.0.0-beta.1" }
+        }))
+        .unwrap()
+    }
+
+    #[test]
+    fn view_json_mirrors_the_summary() {
+        let pack = packument();
+        let latest = pack.versions.get("2.0.0").unwrap();
+        let doc = view_json("chalk", &pack, latest);
+        // parses round-trip and carries the key fields
+        let parsed: serde_json::Value = serde_json::from_str(&serde_json::to_string(&doc).unwrap()).unwrap();
+        assert_eq!(parsed["name"], "chalk");
+        assert_eq!(parsed["version"], "2.0.0");
+        assert_eq!(parsed["distTags"]["latest"], "2.0.0");
+        assert_eq!(parsed["distTags"]["next"], "3.0.0-beta.1");
+        assert_eq!(parsed["versions"].as_array().map(|a| a.len()), Some(2));
+        assert_eq!(parsed["description"], "a test packument");
+        assert_eq!(parsed["dependencies"]["ms"], "^2.1.0");
+        assert_eq!(parsed["license"], "MIT");
+        assert_eq!(parsed["homepage"], "https://example.com");
+    }
 }
